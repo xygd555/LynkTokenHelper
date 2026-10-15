@@ -1,0 +1,6 @@
+/dist/
+/.cache/
+/test-results/
+/state/
+/wpf/obj/
+/wpf/bin/

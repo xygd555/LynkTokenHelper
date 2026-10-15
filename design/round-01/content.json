@@ -1,0 +1,14 @@
+{
+  "app": "领克凭据助手",
+  "server": "https://sign.example.com",
+  "serverHost": "sign.example.com",
+  "username": "周末去看海",
+  "password": "••••••••••••",
+  "token": "rt_7f3c9a21b84e6d02c1f59a7e43d8b60a9c2e145f786d3ab8e940c51d27f60a3b8d9e4c2f710a5b6e83d29c04a8f16b75e2d930a4c86f1b57d2e9a403c168f5b0a6e24d7189c03b5a7e162d8f940c6b31a52e7d90b4c83f126a5e0d72b91c4f6a83e5d207b14c9f603a8e72d1",
+  "device": "4c8f20a1-37d6-4b91-a582-6e13f0c249ab",
+  "capturedAt": "14:32:08",
+  "connections": "46",
+  "requests": "9",
+  "errorTitle": "提交失败，凭据已保留",
+  "errorBody": "服务器暂时无法连接。可重试，或复制 Token 手动填写。"
+}

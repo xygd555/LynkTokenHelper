@@ -1,0 +1,344 @@
+using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.Globalization;
+using System.Linq;
+using System.Runtime.InteropServices;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Input;
+using System.Windows.Interop;
+using System.Windows.Media;
+using System.Windows.Media.Animation;
+using System.Windows.Media.Imaging;
+using System.Windows.Threading;
+
+namespace LynkSignTokenHelper
+{
+    public partial class MainWindow : Window
+    {
+        private readonly ICoreClient client;
+        private readonly bool restoreOnly;
+        private readonly Func<Rect> workArea;
+        private CoreSnapshot snapshot;
+        private bool ready, alive, editLogin, showPassword, rendering, allowClose, closeRequested, started;
+        private long pendingId;
+        private string lastAction;
+        private string candidateSignature = "";
+        private readonly DispatcherTimer toastTimer;
+        public Action<string> CopyText { get; set; } = Clipboard.SetText;
+
+        public MainWindow(ICoreClient client, bool restoreOnly = false, Func<Rect> workArea = null)
+        {
+            this.client = client;
+            this.restoreOnly = restoreOnly;
+            this.workArea = workArea ?? (() => SystemParameters.WorkArea);
+            InitializeComponent();
+            Icon = BitmapFrame.Create(new Uri("pack://application:,,,/LynkSignTokenHelper-windows-x64;component/Branding/lynk-icon.ico"));
+            Address.Text = BuildInfo.DefaultServer;
+            toastTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2.1) };
+            toastTimer.Tick += (sender, args) => { toastTimer.Stop(); Toast.Visibility = Visibility.Collapsed; };
+            client.Updated += value => Dispatcher.BeginInvoke(new Action(() =>
+            {
+                ready = alive = true;
+                if (pendingId != 0 && pendingId <= value.request_id && !value.pending)
+                {
+                    if (lastAction == "login" && value.state.logged_in && string.IsNullOrEmpty(value.error)) editLogin = false;
+                    pendingId = 0;
+                    lastAction = "";
+                }
+                if (closeRequested && !value.closing && !string.IsNullOrEmpty(value.error)) closeRequested = false;
+                snapshot = value;
+                Render();
+            }));
+            client.Faulted += message => Dispatcher.BeginInvoke(new Action(() =>
+            {
+                alive = false;
+                closeRequested = false;
+                pendingId = 0;
+                if (snapshot != null) { snapshot.error = message; snapshot.pending = snapshot.closing = false; snapshot.state.busy = false; Render(); }
+                else { LoginNotice.Text = message; LoginNotice.Visibility = Visibility.Visible; LoginButtonText.Text = "无法连接"; }
+            }));
+            client.Closed += () => Dispatcher.BeginInvoke(new Action(() =>
+            {
+                allowClose = true;
+                if (restoreOnly) MessageBox.Show(this, "原代理配置已恢复。", Title, MessageBoxButton.OK, MessageBoxImage.Information);
+                Close();
+            }));
+            Closed += (sender, args) => { toastTimer.Stop(); client.Dispose(); };
+            ApplyWindowSize(true);
+        }
+
+        private static Visibility Show(bool value) => value ? Visibility.Visible : Visibility.Collapsed;
+        private static Brush Brush(string value) => (Brush)new BrushConverter().ConvertFromString(value);
+        private bool Busy => pendingId != 0 || closeRequested || (snapshot != null && (snapshot.pending || snapshot.closing || snapshot.state.busy));
+        private void WindowLoaded(object sender, RoutedEventArgs args)
+        {
+            if (started) return;
+            started = true;
+            Fade(LoginView);
+            client.Start();
+            Address.Focus();
+        }
+        private void ApplyWindowSize(bool login)
+        {
+            Rect area = workArea();
+            Width = Math.Min(login ? 520 : 1040, Math.Max(360, area.Width - 24));
+            Height = Math.Min(login ? 700 : 720, Math.Max(360, area.Height - 24));
+            Left = area.Left + (area.Width - Width) / 2;
+            Top = area.Top + (area.Height - Height) / 2;
+            bool narrow = !login && Width < 800;
+            Workbench.ColumnDefinitions[0].Width = narrow ? new GridLength(1, GridUnitType.Star) : new GridLength(248);
+            Workbench.ColumnDefinitions[1].Width = new GridLength(narrow ? 0 : 28);
+            Workbench.ColumnDefinitions[2].Width = narrow ? new GridLength(0) : new GridLength(1, GridUnitType.Star);
+            Grid.SetColumn(ResultPanel, narrow ? 0 : 2);
+            Grid.SetRow(ResultPanel, narrow ? 1 : 0);
+            ResultPanel.Margin = new Thickness(0, narrow ? 24 : 2, 0, 0);
+            LoginCardHost.Width = Math.Min(388, Math.Max(280, Width - 64));
+            bool compactLogin = Height < 650;
+            LoginCardHost.Padding = compactLogin ? new Thickness(18, 12, 18, 12) : new Thickness(24, 22, 24, 22);
+            LoginCardHost.Margin = new Thickness(20, compactLogin ? 10 : 16, 20, compactLogin ? 10 : 16);
+            LoginHeader.Margin = new Thickness(0, 0, 0, compactLogin ? 12 : 18);
+            LoginSubtitle.Visibility = Show(!compactLogin);
+            AddressLabel.Margin = new Thickness(0, 0, 0, compactLogin ? 4 : 6);
+            UsernameLabel.Margin = PasswordLabel.Margin = new Thickness(0, compactLogin ? 10 : 14, 0, compactLogin ? 4 : 6);
+            Address.Height = Username.Height = Password.Height = VisiblePassword.Height = compactLogin ? 40 : 42;
+            AllowHttp.Margin = new Thickness(0, compactLogin ? 8 : 18, 0, compactLogin ? 12 : 18);
+            LoginNoticeHost.Height = compactLogin ? 44 : 48;
+        }
+        private static void Fade(UIElement element)
+        {
+            if (SystemParameters.ClientAreaAnimation)
+                element.BeginAnimation(OpacityProperty, new DoubleAnimation(0.35, 1, TimeSpan.FromMilliseconds(200)) { FillBehavior = FillBehavior.Stop });
+        }
+        private void Render()
+        {
+            if (snapshot == null) return;
+            rendering = true;
+            try
+            {
+                AppState state = snapshot.state;
+                bool loggedIn = state.logged_in && !editLogin;
+                bool captured = !string.IsNullOrEmpty(snapshot.token);
+                bool busy = Busy;
+                bool saved = state.submission == "saved" && snapshot.selected == state.selected_candidate;
+                CandidateInfo[] values = state.candidates ?? new CandidateInfo[0];
+                if ((MainView.Visibility == Visibility.Visible) != loggedIn)
+                {
+                    MainView.Visibility = Show(loggedIn);
+                    LoginView.Visibility = Show(!loggedIn);
+                    ApplyWindowSize(!loggedIn);
+                    Fade(loggedIn ? (UIElement)MainView : LoginView);
+                    if (!loggedIn) Address.Focus();
+                }
+                Address.IsEnabled = Username.IsEnabled = Password.IsEnabled = VisiblePassword.IsEnabled = AllowHttp.IsEnabled = TogglePassword.IsEnabled = !busy && alive;
+                LoginButtonText.Text = closeRequested || snapshot.closing ? "正在恢复并退出…" : busy ? "正在连接…" : "登录服务器";
+                UpdateLoginButton();
+                BackButton.Visibility = state.logged_in ? Visibility.Visible : Visibility.Hidden;
+                BackButton.IsEnabled = !busy;
+                bool loginError = !loggedIn && !busy && !state.logged_in && !string.IsNullOrEmpty(state.message) && !state.message.StartsWith("请先登录服务器");
+                LoginNotice.Visibility = loginError || (!alive && !string.IsNullOrEmpty(snapshot.error)) ? Visibility.Visible : Visibility.Hidden;
+                LoginNotice.Text = !alive ? snapshot.error : loginError ? state.message : "";
+                ServerAddress.Text = state.server_address ?? "";
+                ServerAddress.ToolTip = state.server_address;
+                AccountName.Text = state.username ?? "";
+                SwitchButton.IsEnabled = alive && !busy && !state.capturing;
+                CaptureTitle.Text = state.capturing ? "正在抓取" : captured ? "抓取完成" : "准备获取";
+                CaptureBadge.Text = state.capturing ? "监听中" : captured ? "已获取" : "待开始";
+                CaptureBadge.Foreground = Brush(state.capturing ? "#A7CEFF" : captured ? "#98D4B1" : "#B2BBC9");
+                StatusIcon.Data = (Geometry)FindResource("Icon_" + (state.capturing ? "arrow_sync" : captured ? "checkmark_circle" : state.trusted ? "key" : "shield_checkmark"));
+                if (state.capturing && SystemParameters.ClientAreaAnimation)
+                {
+                    if (!((RotateTransform)StatusIcon.RenderTransform).HasAnimatedProperties)
+                        ((RotateTransform)StatusIcon.RenderTransform).BeginAnimation(RotateTransform.AngleProperty, new DoubleAnimation(0, 360, TimeSpan.FromSeconds(2)) { RepeatBehavior = RepeatBehavior.Forever });
+                }
+                else ((RotateTransform)StatusIcon.RenderTransform).BeginAnimation(RotateTransform.AngleProperty, null);
+                string captureTime = state.trusted ? "等待开始抓取" : "先安装抓包证书";
+                if (captured && DateTimeOffset.TryParse(state.captured_at, CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTimeOffset time)) captureTime = "捕获于 " + time.LocalDateTime.ToString("HH:mm:ss");
+                if (state.capturing) captureTime = "等待小程序登录流量";
+                CaptureTime.Text = captureTime;
+                Connections.Text = state.connections.ToString();
+                LynkRequests.Text = state.lynk_requests.ToString();
+                StartButton.Visibility = state.capturing ? Visibility.Hidden : Visibility.Visible;
+                StopButton.Visibility = state.capturing ? Visibility.Visible : Visibility.Hidden;
+                StartButtonText.Text = captured ? "重新抓取" : "开始抓取";
+                StartButton.Style = (Style)FindResource(captured ? typeof(Button) : (object)"Primary");
+                StartButton.IsEnabled = alive && !busy && state.trusted && !state.confirmation_required;
+                StopButton.IsEnabled = alive && !busy;
+                CertificateStatus.Text = state.trusted ? "已安装 · 当前用户" : "尚未安装";
+                CertificateStatus.ToolTip = state.trusted ? "证书已安装到当前 Windows 用户的受信任根证书存储区" : "安装抓包证书后即可开始抓取";
+                InstallButton.Visibility = Show(!state.trusted);
+                InstallButton.IsEnabled = alive && !busy && !state.capturing;
+                CaptureGuide.Text = !state.trusted ? "安装证书后开始抓取，再在电脑微信登录领克小程序。" : state.capturing ? "请在电脑微信重新登录领克小程序；没有流量时，先关闭小程序再打开。" : captured ? "Token 已保留在右侧，可复制备用；重新抓取可更新凭据。" : "开始抓取后，在电脑微信的领克小程序重新登录。";
+                ResultHint.Visibility = Show(!captured || state.capturing);
+                ResultHint.Text = state.capturing ? "抓到凭据后会自动提交" : "获取后自动提交到服务器";
+                string signature = string.Join("\n", values.Select(value => value.id + "|" + value.device_id + "|" + value.source));
+                if (signature != candidateSignature)
+                {
+                    candidateSignature = signature;
+                    Candidates.ItemsSource = values.Select((value, index) => (index + 1) + " · " + value.source + " · " + (string.IsNullOrEmpty(value.device_id) ? "设备 ID 未获取" : value.device_id)).ToArray();
+                }
+                Candidates.SelectedIndex = snapshot.selected;
+                Candidates.IsEnabled = alive && !busy && !state.capturing && !state.confirmation_required;
+                CandidateField.Visibility = Show(values.Length > 1 && !state.confirmation_required);
+                TokenLabel.Text = captured && state.capturing ? "上次抓取的 Refresh Token" : "Refresh Token";
+                TokenSource.Text = captured && snapshot.selected < values.Length ? values[snapshot.selected].source : "";
+                if (Token.Text != (snapshot.token ?? "")) Token.Text = snapshot.token ?? "";
+                TokenPlaceholder.Visibility = Show(!captured);
+                Device.Text = snapshot.device_id ?? (captured ? "未获取，使用服务器已有设备 ID" : "尚未获取");
+                if (Device.Text.Length == 0) Device.Text = captured ? "未获取，使用服务器已有设备 ID" : "尚未获取";
+                CopyTokenButton.IsEnabled = captured && !closeRequested;
+                CopyDeviceButton.IsEnabled = !string.IsNullOrEmpty(snapshot.device_id) && !closeRequested;
+                RenderNotice(state, captured, saved, busy, values.Length);
+                Confirmation.Visibility = Show(state.confirmation_required && !closeRequested);
+                NewAccount.Text = state.account?.display_name ?? "领克账号";
+                NewAccountId.Text = state.account?.id ?? "";
+                OldAccountId.Text = state.previous_account_id ?? "未知";
+                ConfirmButton.IsEnabled = CancelButton.IsEnabled = alive && !busy;
+                SubmitActions.Visibility = Show(!state.confirmation_required);
+                SubmitButton.IsEnabled = alive && !busy && captured && !state.capturing && !saved;
+                SubmitButton.Content = saved ? "已保存到服务器" : (state.submission == "failed" && snapshot.selected == state.selected_candidate) || state.submission == "cancelled" ? "重新提交" : state.submission == "submitting" ? "正在提交…" : "提交服务器";
+                BackupHint.Visibility = Show(captured);
+                BackupHint.Text = saved ? "本次抓取的 Token 仍保留在界面中，可复制备用。" : "提交失败时，可复制 Token 手动填写。";
+                ProxyState.Text = state.capturing ? "系统代理正在使用" : "代理已恢复";
+                ProxyDot.Fill = Brush(state.capturing ? "#85BAFF" : "#98D4B1");
+                RestoreButton.IsEnabled = alive && !busy;
+                RemoveButton.IsEnabled = alive && !busy && state.trusted;
+                ExitButton.IsEnabled = !closeRequested;
+            }
+            finally { rendering = false; }
+        }
+        private void RenderNotice(AppState state, bool captured, bool saved, bool busy, int count)
+        {
+            string title = state.trusted ? "可以开始抓取" : "先安装抓包证书";
+            string body = state.trusted ? "点击左侧开始抓取，再在电脑微信重新登录领克小程序。" : "点击左侧证书旁的“安装”，完成后即可开始抓取。";
+            string kind = "", icon = state.trusted ? "key" : "shield_checkmark";
+            if (captured) { title = "凭据已获取"; body = count > 1 ? "选择对应的凭据后提交。" : state.message; icon = "checkmark_circle"; }
+            if (state.capturing) { title = "正在等待新的登录凭据"; body = state.message; icon = "arrow_sync"; }
+            if (state.submission == "failed" && snapshot.selected == state.selected_candidate) { title = "提交失败，Token 已保留"; body = state.message; kind = "warning"; icon = "dismiss_circle"; }
+            if (saved) { title = "已保存到服务器"; body = (state.account?.display_name ?? "领克账号") + " · " + state.account?.id; kind = "success"; icon = "checkmark_circle"; }
+            if (state.submission == "saved" && !saved) { title = "当前选择尚未提交"; body = "已保存的是第 " + (state.selected_candidate + 1) + " 份凭据。"; }
+            if (state.submission == "cancelled") { title = "已取消换绑"; body = "服务器原账号未更改，抓取的 Token 仍可复制。"; }
+            if (!string.IsNullOrEmpty(snapshot.error)) { title = state.confirmation_required ? "换绑确认未完成" : state.submission == "failed" ? "提交失败，Token 已保留" : "操作未完成"; body = snapshot.error; kind = "warning"; icon = "dismiss_circle"; }
+            if (!captured && state.trusted && !state.capturing && !string.IsNullOrEmpty(state.message) && !state.message.StartsWith("服务器登录成功") && string.IsNullOrEmpty(snapshot.error)) { title = "操作提示"; body = state.message; }
+            if (busy) { title = closeRequested || snapshot.closing ? "正在恢复代理并退出" : state.submission == "submitting" ? "正在提交服务器" : "正在处理"; body = "请稍候…"; kind = ""; icon = "arrow_sync"; }
+            NoticeTitle.Text = title;
+            NoticeBody.Text = body ?? "";
+            MainNotice.Background = Brush(kind == "warning" ? "#302A31" : kind == "success" ? "#25312D" : "#282C33");
+            NoticeTitle.Foreground = Brush(kind == "warning" ? "#F0C2C8" : kind == "success" ? "#A9DCBD" : "#F2F4F8");
+            NoticeIcon.Fill = Brush(kind == "warning" ? "#EDAFB8" : kind == "success" ? "#98D4B1" : "#85BAFF");
+            NoticeIcon.Data = (Geometry)FindResource("Icon_" + icon);
+            MainNotice.Visibility = Show(!state.confirmation_required || busy || !string.IsNullOrEmpty(snapshot.error));
+        }
+        private void UpdateLoginButton()
+        {
+            if (LoginButton == null || Address == null || Username == null || Password == null) return;
+            LoginButton.IsEnabled = ready && alive && !Busy && !string.IsNullOrWhiteSpace(Address.Text) && !string.IsNullOrWhiteSpace(Username.Text) && Password.Password.Length > 0;
+        }
+        private void Send(string action, object input = null)
+        {
+            if (!alive || Busy) return;
+            try { lastAction = action; pendingId = client.Command(action, input); Render(); }
+            catch (Exception) { ShowToast("窗口连接已断开，请重新打开工具。", false); }
+        }
+        private void ShowToast(string message, bool success = true)
+        {
+            ToastText.Text = message;
+            ToastText.Foreground = Brush(success ? "#BCE6CC" : "#F0C2C8");
+            Toast.Visibility = Visibility.Visible;
+            Fade(Toast);
+            toastTimer.Stop();
+            toastTimer.Start();
+        }
+        private void Copy(string value, string label)
+        {
+            if (string.IsNullOrEmpty(value)) return;
+            try { CopyText(value); ShowToast(label + "已复制"); }
+            catch (Exception) { ShowToast("剪贴板正在被其他程序使用，请稍后重试。", false); }
+        }
+        private void LoginInputChanged(object sender, TextChangedEventArgs args) => UpdateLoginButton();
+        private void PasswordChanged(object sender, RoutedEventArgs args) => UpdateLoginButton();
+        private void VisiblePasswordChanged(object sender, TextChangedEventArgs args)
+        {
+            if (showPassword && Password != null) Password.Password = VisiblePassword.Text;
+        }
+        private void TogglePasswordClicked(object sender, RoutedEventArgs args)
+        {
+            showPassword = !showPassword;
+            if (showPassword) VisiblePassword.Text = Password.Password;
+            Password.Visibility = Show(!showPassword);
+            VisiblePassword.Visibility = Show(showPassword);
+            PasswordIcon.Data = (Geometry)FindResource(showPassword ? "Icon_eye_off" : "Icon_eye");
+            TogglePassword.ToolTip = showPassword ? "隐藏密码" : "显示密码";
+            if (showPassword) VisiblePassword.Focus(); else { VisiblePassword.Clear(); Password.Focus(); }
+        }
+        private void LoginClicked(object sender, RoutedEventArgs args)
+        {
+            if (!LoginButton.IsEnabled) return;
+            var input = new { Address = Address.Text.Trim(), Username = Username.Text.Trim(), Password = Password.Password, AllowHTTP = AllowHttp.IsChecked == true };
+            Send("login", input);
+            Password.Clear();
+            VisiblePassword.Clear();
+            UpdateLoginButton();
+        }
+        private void SwitchClicked(object sender, RoutedEventArgs args)
+        {
+            showPassword = false;
+            Password.Visibility = Visibility.Visible;
+            VisiblePassword.Visibility = Visibility.Collapsed;
+            PasswordIcon.Data = (Geometry)FindResource("Icon_eye");
+            Password.Clear(); VisiblePassword.Clear(); editLogin = true; Render();
+        }
+        private void BackClicked(object sender, RoutedEventArgs args) { editLogin = false; Render(); }
+        private void CandidateChanged(object sender, SelectionChangedEventArgs args)
+        {
+            if (!rendering && Candidates.SelectedIndex >= 0 && !Busy)
+                try { client.Select(Candidates.SelectedIndex); } catch (Exception) { ShowToast("选择失败，请重新打开工具。", false); }
+        }
+        private void CopyTokenClicked(object sender, RoutedEventArgs args) => Copy(snapshot?.token, "Token ");
+        private void CopyDeviceClicked(object sender, RoutedEventArgs args) => Copy(snapshot?.device_id, "设备 ID ");
+        private void InstallClicked(object sender, RoutedEventArgs args) => Send("certificate/install");
+        private void RemoveClicked(object sender, RoutedEventArgs args) => Send("certificate/remove");
+        private void StartClicked(object sender, RoutedEventArgs args) => Send("start");
+        private void StopClicked(object sender, RoutedEventArgs args) => Send("stop");
+        private void RestoreClicked(object sender, RoutedEventArgs args) => Send("restore");
+        private void SubmitClicked(object sender, RoutedEventArgs args) => Send("submit");
+        private void ConfirmClicked(object sender, RoutedEventArgs args) => Send("confirm");
+        private void CancelClicked(object sender, RoutedEventArgs args) => Send("cancel");
+        private void ExitClicked(object sender, RoutedEventArgs args) => Close();
+        private void WindowClosing(object sender, CancelEventArgs args)
+        {
+            if (allowClose || !ready || !alive) return;
+            args.Cancel = true;
+            if (closeRequested) return;
+            closeRequested = true;
+            Render();
+            try { client.Close(); }
+            catch (Exception) { closeRequested = false; alive = false; ShowToast("连接已断开，请重新打开工具检查代理恢复。", false); Render(); }
+        }
+        private void WindowKeyDown(object sender, KeyEventArgs args)
+        {
+            if (args.Key == Key.Enter && LoginView.Visibility == Visibility.Visible && LoginButton.IsEnabled) { LoginClicked(sender, args); args.Handled = true; }
+            if (args.Key != Key.Escape) return;
+            args.Handled = true;
+            if (snapshot?.state.confirmation_required == true && !Busy) Send("cancel");
+            else if (editLogin && snapshot?.state.logged_in == true) { editLogin = false; Render(); }
+            else Close();
+        }
+        [DllImport("dwmapi.dll")] private static extern int DwmSetWindowAttribute(IntPtr handle, int attribute, ref int value, int size);
+        private void WindowSourceInitialized(object sender, EventArgs args)
+        {
+            try
+            {
+                IntPtr handle = new WindowInteropHelper(this).Handle;
+                int dark = 1, corners = 2, caption = 0x292320, text = 0xF8F4F2;
+                DwmSetWindowAttribute(handle, 20, ref dark, 4);
+                DwmSetWindowAttribute(handle, 33, ref corners, 4);
+                DwmSetWindowAttribute(handle, 35, ref caption, 4);
+                DwmSetWindowAttribute(handle, 36, ref text, 4);
+            }
+            catch (DllNotFoundException) { }
+            catch (EntryPointNotFoundException) { }
+        }
+    }
+}

@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>白色极简工作台</title>
+<style>
+*{box-sizing:border-box}body{margin:0;width:1680px;min-height:790px;background:#e9ecee;color:#20262c;font:14px/1.65 "Microsoft YaHei UI","Microsoft YaHei",sans-serif}button,input{font:inherit}button{cursor:default}body>header{height:80px;padding:22px 44px;display:flex;align-items:center;gap:18px}body>header strong{font-size:21px;font-weight:600}body>header span{color:#58626b}main{display:flex;gap:32px;padding:0 44px}.window{background:white;border:1px solid #d5dadd;border-radius:12px;box-shadow:0 14px 32px #35424e14;overflow:hidden;height:650px}.login{width:520px;flex:none}.workspace{width:1040px;flex:none}.chrome{height:38px;display:flex;align-items:center;justify-content:space-between;padding-left:16px;font-size:13px;color:#5d666e;border-bottom:1px solid #eff1f2}.window-buttons{display:flex;align-items:center;gap:27px;margin-right:18px}.window-buttons span{font:16px/1 sans-serif;color:#737b81}.mark{width:23px;height:23px;display:inline-grid;place-items:center;background:#c84c35;color:white;border-radius:6px;font-weight:600;margin-right:9px;line-height:1}.login-body{padding:43px 48px}.login h1{font-size:28px;line-height:1.3;margin:0 0 10px;font-weight:600;letter-spacing:-.5px}.muted{color:#68727b}.login p{margin:0 0 29px}.field{display:block;margin:18px 0 0}.field>span{display:block;font-weight:500;margin-bottom:7px}.field input{display:block;width:100%;height:43px;border:1px solid #d9dde0;border-radius:6px;background:#fbfcfc;padding:0 12px;color:#303941;outline:none}.check{display:flex;align-items:center;gap:9px;margin:22px 0 24px;color:#5b646d}.box{display:inline-block;width:16px;height:16px;border:1px solid #aeb7bd;background:white;border-radius:3px;flex:none}.primary{border:0;border-radius:6px;background:#c84c35;color:#fff;font-weight:600;height:43px;padding:0 22px}.login .primary{width:100%}.login-note{text-align:center;font-size:14px;color:#6d767d;margin-top:19px}.topbar{height:76px;padding:17px 28px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #e8ebed}.topbar strong{font-size:18px;font-weight:600}.server{color:#69737b;font-size:14px;display:flex;align-items:center;gap:7px}.dot{width:7px;height:7px;background:#3b7a58;border-radius:50%;display:inline-block;flex:none}.account{display:flex;align-items:center;gap:17px}.link{border:0;background:none;padding:0;color:#525f69;font-size:14px}.content{padding:23px 28px 0}.heading{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px}.heading h1{font-size:25px;line-height:1.3;margin:0 0 5px;font-weight:600}.heading p{margin:0;color:#63706d}.outline{border:1px solid #d6dcdf;background:#fff;color:#36424b;border-radius:6px;padding:8px 15px;height:38px}.capture{display:flex;align-items:center;gap:13px;background:#f2f7f4;border-radius:7px;padding:13px 16px;height:65px}.check-icon{display:grid;place-items:center;font-size:18px;width:30px;height:30px;border-radius:50%;background:#dfeee4;color:#2f6b48}.capture strong{font-weight:600;color:#2d4d3a}.capture .time{font-size:14px;color:#60766a;margin-left:9px}.counts{margin-left:auto;display:flex;gap:20px;color:#55675d}.counts b{font-family:Consolas,monospace;font-size:17px;color:#253d30;font-weight:500;margin-left:5px}.token-heading{display:flex;align-items:center;justify-content:space-between;margin:21px 0 9px}.token-heading strong{font-size:16px;font-weight:600}.copy{height:32px;padding:4px 12px;background:white;border:1px solid #d3dadd;border-radius:5px;color:#394650}.copy svg{vertical-align:-2px;margin-right:5px}.token{font:14px/1.8 Consolas,monospace;word-break:break-all;white-space:pre-wrap;color:#3b4650;margin:0;background:#f4f5f6;border:1px solid #e4e7e9;border-radius:6px;padding:14px 16px;min-height:104px}.device{display:flex;align-items:center;gap:12px;margin:11px 0 19px;color:#66717a}.device code{font:14px Consolas,monospace;color:#3b4650}.device button{margin-left:auto;font-size:14px}.failure{display:flex;align-items:center;gap:12px;background:#fff3ef;border-radius:7px;padding:14px 16px;height:84px;color:#863b2e}.failure-icon{width:23px;height:23px;border:1.5px solid #ba5945;border-radius:50%;text-align:center;font-weight:600;line-height:21px;flex:none}.failure strong{font-size:15px;font-weight:600}.failure p{font-size:14px;margin:3px 0 0;color:#8a5145}.failure .primary{margin-left:auto;white-space:nowrap;padding:0 20px}.bottom{margin-top:20px;padding:13px 28px;border-top:1px solid #e9ecee;display:flex;justify-content:space-between;color:#68737a;font-size:14px}.bottom .network{color:#3c6e50;display:flex;gap:7px;align-items:center}.utilities{display:flex;gap:20px}.board-note{margin:18px 44px;color:#5e6870;font-size:14px}
+</style>
+</head>
+<body>
+<header><strong>01 白色极简工作台</strong><span>登录页 / 主界面</span></header>
+<main>
+<section class="window login">
+  <div class="chrome"><span><b class="mark">L</b>{{app}}</span><div class="window-buttons"><span>−</span><span>□</span><span>×</span></div></div>
+  <div class="login-body"><h1>连接你的服务器</h1><p class="muted">登录面板账号，开始获取领克凭据。</p>
+    <label class="field"><span>服务器地址</span><input value="{{server}}" readonly></label>
+    <label class="field"><span>面板账号</span><input value="{{username}}" readonly></label>
+    <label class="field"><span>面板密码</span><input value="{{password}}" readonly></label>
+    <div class="check"><span class="box"></span>允许内网 HTTP 连接</div>
+    <button class="primary">登录服务器</button><div class="login-note">使用 Lynk Sign 面板账号登录</div>
+  </div>
+</section>
+<section class="window workspace">
+  <div class="chrome"><span><b class="mark">L</b>{{app}}</span><div class="window-buttons"><span>−</span><span>□</span><span>×</span></div></div>
+  <div class="topbar"><div><strong>{{app}}</strong><div class="server"><span class="dot"></span>{{serverHost}}</div></div><div class="account"><span>{{username}}</span><button class="link">切换服务器</button></div></div>
+  <div class="content">
+    <div class="heading"><div><h1>获取领克凭据</h1><p>抓包证书已安装</p></div><button class="outline">重新抓取</button></div>
+    <div class="capture"><span class="check-icon">✓</span><div><strong>抓取完成</strong><span class="time">{{capturedAt}} · 已恢复原代理</span></div><div class="counts"><span>连接<b>{{connections}}</b></span><span>领克请求<b>{{requests}}</b></span></div></div>
+    <div class="token-heading"><strong>Refresh Token</strong><button class="copy"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="5" y="5" width="8" height="9" rx="1"/><path d="M10 3H3v8"/></svg>复制 Token</button></div>
+    <pre class="token">{{token}}</pre>
+    <div class="device"><span>设备 ID</span><code>{{device}}</code><button class="link">复制设备 ID</button></div>
+    <div class="failure"><span class="failure-icon">!</span><div><strong>{{errorTitle}}</strong><p>{{errorBody}}</p></div><button class="primary">重新提交</button></div>
+  </div>
+  <div class="bottom"><span class="network"><span class="dot"></span>代理已恢复</span><div class="utilities"><button class="link">恢复代理</button><button class="link">移除证书</button></div></div>
+</section>
+</main><p class="board-note">推荐：工作区通栏排列，状态、凭据和补救操作沿同一条阅读路径展开。</p>
+</body></html>

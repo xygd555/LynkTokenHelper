@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "project": "领克凭据助手 · 界面方向",
+  "brief": "每套同时展示登录页和主界面。共用虚构服务器、账号、Token 和提交失败状态，仅比较视觉与信息组织。",
+  "lang": "zh",
+  "round": "01",
+  "nativeViewport": "1680x790",
+  "candidates": [
+    {
+      "id": "minimal",
+      "name": "01 白色极简工作台",
+      "concept": "让抓取结果与下一步操作一眼可见。",
+      "typography": "微软雅黑 UI，正文 14px、标题 25–28px；Token 使用 Consolas 14px。",
+      "palette": ["#FFFFFF", "#20262C", "#C84C35", "#F4F5F6"],
+      "traits": ["居中登录表单", "通栏工作区", "珊瑚橙主操作", "结果紧邻复制与重试"],
+      "source": "minimal.html"
+    },
+    {
+      "id": "graphite",
+      "name": "02 深色仪表台",
+      "concept": "抓取状态与凭据结果并置，像一台清晰的网络仪表。",
+      "typography": "等线，正文 14–15px、标题 26–28px；Token 和统计使用 Consolas。",
+      "palette": ["#171D26", "#E9EFF6", "#78B5FF", "#242E3C"],
+      "traits": ["左右分区登录", "左侧抓取仪表", "右侧凭据工作区", "蓝色操作与暗色表面"],
+      "source": "graphite.html"
+    },
+    {
+      "id": "guided",
+      "name": "03 浅色步骤向导",
+      "concept": "把证书、获取与提交连成一条有明确位置的路径。",
+      "typography": "微软雅黑，正文 14px、标题 26–28px；步骤数字与 Token 使用 Consolas。",
+      "palette": ["#FAF9F4", "#26382E", "#32664C", "#EAF0E7"],
+      "traits": ["顶部登录阶段提示", "左侧三步进度", "暖灰与松绿色", "当前步骤集中操作"],
+      "source": "guided.html"
+    }
+  ]
+}
