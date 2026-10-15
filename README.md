@@ -62,16 +62,18 @@ LYNK_HELPER_REPOSITORY=https://github.com/xygd555/LynkTokenHelper
 
 工具使用根目录 `VERSION` 中的独立版本号，格式为 `v1.3.6`，修改工具后先更新该文件。
 
-1. 提交代码和 `VERSION`，推送到本仓库。
-2. 在 **Actions → 构建并发布 Windows 凭据助手 → Run workflow** 选择分支，填写发布说明。
-3. 可选勾选“标记为预发布版本”；正式版会设为 **Latest**，预发布版不会替换正式版下载入口。
+1. 修改工具后更新 `VERSION`，提交代码并推送到 `main` 分支。
+2. **推送后自动构建并发布**，发布说明使用此次推送最后一个提交的说明，正式版会设为 **Latest**。
+3. 如果 `VERSION` 对应的版本已经发布，本次仍会构建并保存 Actions 产物，但跳过重复发布；需要发布新版时先递增 `VERSION`。
+
+仍可在 **Actions → 构建并发布 Windows 凭据助手 → Run workflow** 手动运行，填写自定义发布说明，可选勾选“标记为预发布版本”。预发布版不会替换正式版下载入口。
 
 工作流执行 Go 测试与静态检查、构建 WPF 程序、核对 EXE 文件版本并发布 Release。Release 标签为 `VERSION` 中的版本号，附件始终使用：
 
 - `LynkSignTokenHelper-windows-x64.exe`
 - `LynkSignTokenHelper-windows-x64.zip`
 
-每个版本的 EXE 文件属性和工具界面都会显示对应版本号，固定附件名用于保持下载链接稳定。同名 Release 已存在时会报错，不覆盖已发布附件。
+每个版本的 EXE 文件属性和工具界面都会显示对应版本号，固定附件名用于保持下载链接稳定。已发布附件不会被覆盖；自动运行遇到同名 Release 会跳过发布，手动重复发布同名版本仍会报错。
 
 可在 **Settings → Secrets and variables → Actions → Variables** 配置 `WINDOWS_HELPER_DEFAULT_SERVER`，用于编译时预填面板地址。它与面板运行环境中的 `LYNK_HELPER_REPOSITORY` 是两个独立配置。
 

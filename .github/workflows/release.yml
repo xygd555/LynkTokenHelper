@@ -1,6 +1,9 @@
 name: 构建并发布 Windows 凭据助手
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       release_notes:
@@ -40,7 +43,7 @@ jobs:
       - name: 读取版本与发布参数
         id: meta
         env:
-          RELEASE_NOTES: ${{ inputs.release_notes }}
+          RELEASE_NOTES: ${{ inputs.release_notes || github.event.head_commit.message }}
         run: |
           $taskSource = Get-Content -LiteralPath VERSION -Raw
           $taskVersion = $taskSource.Trim()
@@ -72,7 +75,7 @@ jobs:
         env:
           RELEASE_VERSION: ${{ steps.meta.outputs.version }}
           FILE_NAME: ${{ steps.meta.outputs.file_name }}
-          RELEASE_NOTES: ${{ inputs.release_notes }}
+          RELEASE_NOTES: ${{ inputs.release_notes || github.event.head_commit.message }}
         run: |
           $taskDist = Join-Path $PWD 'dist'
           $taskSource = Join-Path $taskDist 'LynkSignTokenHelper-windows-x64.exe'
@@ -106,6 +109,13 @@ jobs:
           FILE_NAME: ${{ steps.meta.outputs.file_name }}
           PRERELEASE: ${{ inputs.prerelease }}
         run: |
+          if ($env:GITHUB_EVENT_NAME -eq 'push') {
+            $taskExistingRelease = gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --json tagName 2>&1
+            if ($LASTEXITCODE -eq 0) {
+              Write-Host "版本 $env:RELEASE_TAG 已发布，本次仅保存构建产物；发布新版请更新 VERSION。"
+              exit 0
+            }
+          }
           $taskRelease = Join-Path $PWD 'dist/release'
           $taskArguments = @(
             'release', 'create', $env:RELEASE_TAG,
