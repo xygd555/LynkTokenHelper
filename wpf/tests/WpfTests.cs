@@ -5,12 +5,14 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
@@ -133,15 +135,19 @@ internal static class WpfTests
         var scroll = Control<ScrollViewer>(window, "MainView");
         Check(scroll.ExtentHeight <= scroll.ViewportHeight + 1, "standard main view requires vertical scrolling: " + scroll.ExtentHeight + " / " + scroll.ViewportHeight);
     }
+    private static void WaitForRender()
+    {
+        int frames = 0;
+        EventHandler rendering = (sender, args) => frames++;
+        CompositionTarget.Rendering += rendering;
+        try { Until(() => frames >= 2); } finally { CompositionTarget.Rendering -= rendering; }
+    }
     private static void Capture(MainWindow window, string name, double scale = 1)
     {
         window.UpdateLayout();
         foreach (string view in new[] { "LoginView", "MainView", "Toast" })
             Control<UIElement>(window, view).BeginAnimation(UIElement.OpacityProperty, null);
-        int frames = 0;
-        EventHandler rendering = (sender, args) => frames++;
-        CompositionTarget.Rendering += rendering;
-        try { Until(() => frames >= 2); } finally { CompositionTarget.Rendering -= rendering; }
+        WaitForRender();
         var visual = Control<Grid>(window, "Root");
         var bitmap = new RenderTargetBitmap((int)Math.Ceiling(visual.ActualWidth * scale), (int)Math.Ceiling(visual.ActualHeight * scale), 96 * scale, 96 * scale, PixelFormats.Pbgra32);
         bitmap.Render(visual);
@@ -444,42 +450,106 @@ internal static class WpfTests
         core.Snapshot.state.server_address = "https://sign.example.com";
         core.Emit();
         Until(() => Control<Button>(window, "MiniProgramButton").IsEnabled);
+        WaitForRender();
         Rect buttonBounds = Bounds(window, "MiniProgramButton");
         Rect panelBounds = Bounds(window, "CapturePanel");
         CheckMainFits(window);
         Click(window, "MiniProgramButton");
         Check(!Control<Button>(window, "MiniProgramButton").IsEnabled && Text(window, "MiniProgramButtonText") == "正在打开…", "open action has no pending feedback");
+        Check(IsTopmost(window), "helper is not kept above WeChat during launch");
+        var competingWindow = new Window { Title = "窗口层级测试", Width = 300, Height = 200, ShowInTaskbar = false };
+        competingWindow.Show();
+        competingWindow.Activate();
+        Pump();
+        Check(IsAbove(window, new WindowInteropHelper(competingWindow).Handle), "launching window covered the helper");
         Control<Button>(window, "MiniProgramButton").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
         Check(launcher.Calls == 1, "duplicate click launched WeChat twice");
         core.Snapshot.state.capturing = true;
         core.Snapshot.state.message = "等待领克登录流量，请在电脑微信打开领克小程序并重新登录。";
         core.Emit(); Pump();
         Check(Bounds(window, "MiniProgramButton") == buttonBounds && Bounds(window, "CapturePanel") == panelBounds, "open progress or capture changed the panel layout");
+        Check(IsTopmost(window), "capture state update removed temporary topmost state");
         Capture(window, "wpf-mini-program-pending-100");
         launcher.Pending.SetResult(true);
         Until(() => Control<Button>(window, "MiniProgramButton").IsEnabled);
         Check(Text(window, "ToastText").Contains("重新打开"), "restart result not shown");
+        Check(!window.Topmost && !IsTopmost(window) && window.IsActive, "successful launch did not restore normal foreground state");
+        competingWindow.Close();
         Capture(window, "wpf-mini-program-opened-100");
         Click(window, "MiniProgramButton");
         launcher.Pending.SetException(new InvalidOperationException("请先登录电脑版微信。"));
         Until(() => Control<Button>(window, "MiniProgramButton").IsEnabled);
         Check(Text(window, "ToastText") == "请先登录电脑版微信。", "open error was not visible");
+        Check(!window.Topmost && !IsTopmost(window), "failed launch left the helper permanently topmost");
+        Click(window, "MiniProgramButton");
+        launcher.Pending.SetCanceled();
+        Until(() => Control<Button>(window, "MiniProgramButton").IsEnabled);
+        Check(!window.Topmost && !IsTopmost(window), "cancelled launch left the helper permanently topmost");
+        SetWindowPos(new WindowInteropHelper(window).Handle, new IntPtr(-1), 0, 0, 0, 0, 0x13);
+        Click(window, "MiniProgramButton");
+        launcher.Pending.SetResult(false);
+        Until(() => Control<Button>(window, "MiniProgramButton").IsEnabled);
+        Check(IsTopmost(window), "launch discarded the previous topmost state");
+        SetWindowPos(new WindowInteropHelper(window).Handle, new IntPtr(-2), 0, 0, 0, 0, 0x13);
         Click(window, "MiniProgramButton");
         window.Close();
         Until(() => !window.IsVisible);
         Check(launcher.Pending.Task.IsCanceled, "closing helper did not cancel pending mini program operation");
     }
+    private static bool IsTopmost(Window window) => (GetWindowLong(new WindowInteropHelper(window).Handle, -20) & 8) != 0;
+    private static bool IsAbove(Window window, IntPtr other)
+    {
+        IntPtr handle = new WindowInteropHelper(window).Handle;
+        for (IntPtr previous = GetWindow(other, 3); previous != IntPtr.Zero; previous = GetWindow(previous, 3))
+            if (previous == handle) return true;
+        return false;
+    }
+    [DllImport("user32.dll")] private static extern IntPtr GetWindow(IntPtr handle, uint command);
+    [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] private static extern int GetWindowLong(IntPtr handle, int index);
+    [DllImport("user32.dll")] private static extern bool SetWindowPos(IntPtr handle, IntPtr after, int x, int y, int width, int height, uint flags);
     private static void ActualMiniProgram()
     {
         var desktop = new WindowsMiniProgramDesktop();
-        Console.WriteLine("领克窗口数量：" + desktop.FindWindows().Count);
-        var launcher = new LynkMiniProgramLauncher(desktop);
-        bool reopened = OpenMiniProgram(launcher);
-        Console.WriteLine(reopened ? "已关闭并重新打开领克小程序。" : "已打开领克小程序。");
-        Check(desktop.FindWindows().Count == 1, "actual WeChat did not show a single Lynk window");
-        Check(OpenMiniProgram(launcher), "second actual launch did not restart Lynk");
-        Check(desktop.FindWindows().Count == 1, "actual WeChat restart created duplicate Lynk windows");
-        Console.WriteLine("真实微信打开与重开验证通过。");
+        var core = new FakeCore();
+        var window = new MainWindow(core, miniProgramLauncher: new LynkMiniProgramLauncher(desktop));
+        try
+        {
+            window.Show();
+            Until(() => core.Started);
+            core.Snapshot.state.logged_in = core.Snapshot.state.trusted = true;
+            core.Snapshot.state.username = "测试用户";
+            core.Snapshot.state.server_address = "https://sign.example.com";
+            core.Emit();
+            Until(() => Control<Button>(window, "MiniProgramButton").IsEnabled);
+            WaitForRender();
+            for (int run = 1; run <= 2; run++)
+            {
+                window.Activate();
+                bool reopening = desktop.FindWindows().Count == 1;
+                Click(window, "MiniProgramButton");
+                Until(() => Control<Button>(window, "MiniProgramButton").IsEnabled);
+                Check(Text(window, "ToastText") == (reopening ? "领克小程序已重新打开，请在小程序内重新登录。" : "领克小程序已打开，请在小程序内重新登录。"), "actual WeChat launch failed: " + Text(window, "ToastText"));
+                Check(desktop.FindWindows().Count == 1, "actual WeChat did not show a single Lynk window");
+                Check(!window.Topmost && !IsTopmost(window), "actual launch left the helper permanently topmost");
+                var settling = Stopwatch.StartNew();
+                while (settling.Elapsed < TimeSpan.FromSeconds(2))
+                {
+                    Pump();
+                    Check(IsAbove(window, desktop.FindWindows().Single()), "actual WeChat covered the helper after launch");
+                    Thread.Sleep(10);
+                }
+                Console.WriteLine("第 " + run + " 次：助手位于小程序前方，置顶已恢复；前台为助手：" + (GetForegroundWindow() == new WindowInteropHelper(window).Handle));
+            }
+            var competingWindow = new Window { Title = "窗口层级测试", Width = 300, Height = 200, ShowInTaskbar = false };
+            competingWindow.Show();
+            competingWindow.Activate();
+            Pump();
+            Check(IsAbove(competingWindow, new WindowInteropHelper(window).Handle), "helper prevented normal window switching after launch");
+            competingWindow.Close();
+            Console.WriteLine("真实微信打开、重开及助手窗口前台验证通过。");
+        }
+        finally { window.Close(); Until(() => !window.IsVisible); }
     }
     private sealed class FakeMiniProgramDesktop : IMiniProgramDesktop
     {

@@ -310,12 +310,16 @@ namespace LynkSignTokenHelper
         {
             if (!MiniProgramButton.IsEnabled || openingMiniProgram) return;
             openingMiniProgram = true;
+            IntPtr handle = new WindowInteropHelper(this).Handle;
+            bool previousTopmost = (GetWindowLong(handle, -20) & 8) != 0;
             using (var operation = new CancellationTokenSource())
             {
                 miniProgramOperation = operation;
                 Render();
                 try
                 {
+                    if (!SetTopmost(handle, true)) throw new InvalidOperationException("无法调整窗口层级，请重新打开工具后重试。");
+                    Activate();
                     bool reopened = await miniProgramLauncher.OpenAsync(operation.Token);
                     if (!closeRequested && IsVisible) ShowToast(reopened ? "领克小程序已重新打开，请在小程序内重新登录。" : "领克小程序已打开，请在小程序内重新登录。");
                 }
@@ -330,6 +334,8 @@ namespace LynkSignTokenHelper
                 }
                 finally
                 {
+                    if (!closeRequested && IsVisible && WindowState != WindowState.Minimized) Activate();
+                    SetTopmost(handle, previousTopmost);
                     miniProgramOperation = null;
                     openingMiniProgram = false;
                     if (IsVisible) Render();
@@ -363,6 +369,10 @@ namespace LynkSignTokenHelper
             else if (editLogin && snapshot?.state.logged_in == true) { editLogin = false; Render(); }
             else Close();
         }
+        private static bool SetTopmost(IntPtr handle, bool value) =>
+            SetWindowPos(handle, new IntPtr(value ? -1 : -2), 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010);
+        [DllImport("user32.dll")] private static extern int GetWindowLong(IntPtr handle, int index);
+        [DllImport("user32.dll", SetLastError = true)] private static extern bool SetWindowPos(IntPtr handle, IntPtr after, int x, int y, int width, int height, uint flags);
         [DllImport("dwmapi.dll")] private static extern int DwmSetWindowAttribute(IntPtr handle, int attribute, ref int value, int size);
         private void WindowSourceInitialized(object sender, EventArgs args)
         {
