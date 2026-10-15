@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Globalization;
+using System.Diagnostics;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -23,7 +24,7 @@ namespace LynkSignTokenHelper
         private readonly Func<Rect> workArea;
         private readonly IMiniProgramLauncher miniProgramLauncher;
         private CancellationTokenSource miniProgramOperation;
-        private bool openingMiniProgram;
+        private bool openingMiniProgram, passwordLogin;
         private CoreSnapshot snapshot;
         private bool ready, alive, editLogin, showPassword, rendering, allowClose, closeRequested, started;
         private long pendingId;
@@ -43,6 +44,7 @@ namespace LynkSignTokenHelper
             public Action Confirmed;
         }
         public Action<string> CopyText { get; set; } = Clipboard.SetText;
+        public Action<string> OpenBrowser { get; set; } = address => Process.Start(new ProcessStartInfo(address) { UseShellExecute = true });
 
         public MainWindow(ICoreClient client, bool restoreOnly = false, Func<Rect> workArea = null, IMiniProgramLauncher miniProgramLauncher = null, TimeSpan? miniProgramCaptureDelay = null)
         {
@@ -64,19 +66,23 @@ namespace LynkSignTokenHelper
             client.Updated += value => Dispatcher.BeginInvoke(new Action(() =>
             {
                 ready = alive = true;
+                bool browserAuthorized = lastAction == "login/browser" && pendingId != 0 && pendingId <= value.request_id && !value.pending && value.state.logged_in && string.IsNullOrEmpty(value.error);
                 if (pendingId != 0 && pendingId <= value.request_id && !value.pending)
                 {
-                    if (lastAction == "login" && value.state.logged_in && string.IsNullOrEmpty(value.error)) editLogin = false;
+                    if ((lastAction == "login" || lastAction == "login/browser") && value.state.logged_in && string.IsNullOrEmpty(value.error)) editLogin = false;
                     pendingId = 0;
                     lastAction = "";
                 }
                 if (closeRequested && !value.closing && !string.IsNullOrEmpty(value.error)) closeRequested = false;
+                bool openAuthorization = !string.IsNullOrEmpty(value.state.authorization_url) && value.state.authorization_url != snapshot?.state.authorization_url;
                 bool newError = !string.IsNullOrEmpty(value.error) && (value.error != snapshot?.error || value.request_id != snapshot?.request_id);
                 bool submissionFailed = value.state.submission == "failed" && snapshot?.state.submission != "failed";
                 bool captureWarning = value.state.message != snapshot?.state.message && (value.state.message?.StartsWith("等待已超时") == true || value.state.message?.StartsWith("领克连接失败") == true);
                 snapshot = value;
                 if (!ShouldPromptForMiniProgramLogin()) miniProgramCaptureTimer.Stop();
                 Render();
+                if (browserAuthorized) BringToFront();
+                if (openAuthorization) TryOpenAuthorization();
                 if (newError) ShowImportantNotice("操作未完成", value.error);
                 else if (submissionFailed) ShowImportantNotice("提交失败，Token 已保留", "本次获取的 Token 已保留，可以在主界面复制备用，也可以检查服务器状态后重试提交。\n\n详细原因见主界面的状态提示。");
                 else if (captureWarning) ShowImportantNotice("抓取需要处理", value.state.message);
@@ -134,7 +140,9 @@ namespace LynkSignTokenHelper
             LoginHeader.Margin = new Thickness(0, 0, 0, compactLogin ? 12 : 18);
             LoginSubtitle.Visibility = Show(!compactLogin);
             AddressLabel.Margin = new Thickness(0, 0, 0, compactLogin ? 4 : 6);
-            UsernameLabel.Margin = PasswordLabel.Margin = new Thickness(0, compactLogin ? 10 : 14, 0, compactLogin ? 4 : 6);
+            UsernameLabel.Margin = new Thickness(0, 0, 0, compactLogin ? 4 : 6);
+            PasswordLabel.Margin = new Thickness(0, compactLogin ? 10 : 14, 0, compactLogin ? 4 : 6);
+            LoginButton.Margin = new Thickness(0, compactLogin ? 12 : 16, 0, 0);
             Address.Height = Username.Height = Password.Height = VisiblePassword.Height = compactLogin ? 40 : 42;
             AllowHttp.Margin = new Thickness(0, compactLogin ? 8 : 18, 0, compactLogin ? 12 : 18);
             LoginNoticeHost.Height = compactLogin ? 44 : 48;
@@ -167,6 +175,18 @@ namespace LynkSignTokenHelper
                 Address.IsEnabled = Username.IsEnabled = Password.IsEnabled = VisiblePassword.IsEnabled = AllowHttp.IsEnabled = TogglePassword.IsEnabled = !busy && alive;
                 LoginButtonText.Text = closeRequested || snapshot.closing ? "正在恢复并退出…" : busy ? "正在连接…" : "登录服务器";
                 UpdateLoginButton();
+                PasswordLoginPanel.Visibility = Show(passwordLogin);
+                BrowserLoginPanel.Visibility = Show(!passwordLogin);
+                LoginModeButton.Content = passwordLogin ? "返回浏览器授权登录" : "使用账号密码登录";
+                LoginModeButton.IsEnabled = !busy && alive;
+                LoginSubtitle.Text = passwordLogin ? "使用 Lynk Sign 面板账号登录" : "通过网页授权连接面板";
+                bool authorizing = state.authorizing || (busy && lastAction == "login/browser");
+                BrowserLoginButtonText.Text = closeRequested ? "正在退出…" : authorizing ? "等待浏览器授权…" : !ready ? "正在准备…" : "浏览器授权登录";
+                BrowserLoginHint.Text = authorizing ? "请在浏览器中完成登录并确认授权，授权请求有效期为 5 分钟。" : "在系统浏览器中登录面板，确认授权后自动进入工具。";
+                BrowserLoginActions.Visibility = authorizing ? Visibility.Visible : Visibility.Collapsed;
+                LoginModeButton.Visibility = authorizing ? Visibility.Collapsed : Visibility.Visible;
+                CancelBrowserLoginButton.IsEnabled = authorizing && !closeRequested && alive;
+                ReopenAuthorizationButton.IsEnabled = authorizing && !string.IsNullOrEmpty(state.authorization_url) && !closeRequested;
                 BackButton.Visibility = state.logged_in ? Visibility.Visible : Visibility.Hidden;
                 BackButton.IsEnabled = !busy;
                 bool loginError = !loggedIn && !busy && !state.logged_in && !string.IsNullOrEmpty(state.message) && !state.message.StartsWith("请先登录服务器");
@@ -268,12 +288,13 @@ namespace LynkSignTokenHelper
         private void UpdateLoginButton()
         {
             if (LoginButton == null || Address == null || Username == null || Password == null) return;
+            if (BrowserLoginButton != null) BrowserLoginButton.IsEnabled = ready && alive && !Busy && !string.IsNullOrWhiteSpace(Address.Text);
             LoginButton.IsEnabled = ready && alive && !Busy && !string.IsNullOrWhiteSpace(Address.Text) && !string.IsNullOrWhiteSpace(Username.Text) && Password.Password.Length > 0;
         }
         private void Send(string action, object input = null)
         {
             if (!alive || Busy || ImportantOverlay.Visibility == Visibility.Visible) return;
-            if (action == "start" || action == "stop" || action == "restore" || action == "login") CancelMiniProgramReminder();
+            if (action == "start" || action == "stop" || action == "restore" || action == "login" || action == "login/browser") CancelMiniProgramReminder();
             try { lastAction = action; pendingId = client.Command(action, input); Render(); }
             catch (Exception) { ShowToast("窗口连接已断开，请重新打开工具。", false); }
         }
@@ -315,13 +336,18 @@ namespace LynkSignTokenHelper
             LoginView.IsEnabled = MainView.IsEnabled = false;
             Toast.Visibility = Visibility.Collapsed;
             ImportantOverlay.Visibility = Visibility.Visible;
+            BringToFront();
+            ImportantConfirmButton.Focus();
+        }
+        private void BringToFront()
+        {
+            if (!IsVisible || closeRequested) return;
             if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
             IntPtr handle = new WindowInteropHelper(this).Handle;
             bool previousTopmost = (GetWindowLong(handle, -20) & 8) != 0;
             SetTopmost(handle, true);
             Activate();
             SetTopmost(handle, previousTopmost);
-            ImportantConfirmButton.Focus();
         }
         private void ImportantConfirmed(object sender, RoutedEventArgs args)
         {
@@ -363,6 +389,38 @@ namespace LynkSignTokenHelper
             TogglePassword.ToolTip = showPassword ? "隐藏密码" : "显示密码";
             if (showPassword) VisiblePassword.Focus(); else { VisiblePassword.Clear(); Password.Focus(); }
         }
+        private void LoginModeClicked(object sender, RoutedEventArgs args)
+        {
+            if (Busy) return;
+            passwordLogin = !passwordLogin;
+            Password.Clear(); VisiblePassword.Clear();
+            Render();
+            if (passwordLogin) Username.Focus(); else Address.Focus();
+        }
+        private void BrowserLoginClicked(object sender, RoutedEventArgs args)
+        {
+            if (!BrowserLoginButton.IsEnabled) return;
+            Password.Clear(); VisiblePassword.Clear();
+            Send("login/browser", new { Address = Address.Text.Trim(), AllowHTTP = AllowHttp.IsChecked == true });
+        }
+        private void TryOpenAuthorization()
+        {
+            string address = snapshot?.state.authorization_url;
+            if (string.IsNullOrEmpty(address)) return;
+            try { OpenBrowser(address); }
+            catch (Exception)
+            {
+                CancelBrowserLoginClicked(this, new RoutedEventArgs());
+                ShowImportantNotice("无法打开浏览器", "请确认 Windows 已设置默认浏览器，再重新发起授权；也可以使用账号密码登录。");
+            }
+        }
+        private void ReopenAuthorizationClicked(object sender, RoutedEventArgs args) => TryOpenAuthorization();
+        private void CancelBrowserLoginClicked(object sender, RoutedEventArgs args)
+        {
+            if (!CancelBrowserLoginButton.IsEnabled) return;
+            try { client.Command("login/cancel"); }
+            catch (Exception) { ShowImportantNotice("取消授权失败", "工具连接已断开，请关闭后重新打开。"); }
+        }
         private void LoginClicked(object sender, RoutedEventArgs args)
         {
             if (!LoginButton.IsEnabled) return;
@@ -376,6 +434,7 @@ namespace LynkSignTokenHelper
         {
             CancelMiniProgramReminder();
             miniProgramOperation?.Cancel();
+            passwordLogin = false;
             showPassword = false;
             Password.Visibility = Visibility.Visible;
             VisiblePassword.Visibility = Visibility.Collapsed;
@@ -471,10 +530,15 @@ namespace LynkSignTokenHelper
                 else if (args.Key == Key.Escape) args.Handled = true;
                 return;
             }
-            if (args.Key == Key.Enter && LoginView.Visibility == Visibility.Visible && LoginButton.IsEnabled) { LoginClicked(sender, args); args.Handled = true; }
+            if (args.Key == Key.Enter && LoginView.Visibility == Visibility.Visible)
+            {
+                if (passwordLogin && LoginButton.IsEnabled) { LoginClicked(sender, args); args.Handled = true; }
+                else if (!passwordLogin && BrowserLoginButton.IsEnabled) { BrowserLoginClicked(sender, args); args.Handled = true; }
+            }
             if (args.Key != Key.Escape) return;
             args.Handled = true;
-            if (snapshot?.state.confirmation_required == true && !Busy) Send("cancel");
+            if (snapshot?.state.authorizing == true) CancelBrowserLoginClicked(sender, args);
+            else if (snapshot?.state.confirmation_required == true && !Busy) Send("cancel");
             else if (editLogin && snapshot?.state.logged_in == true) { editLogin = false; Render(); }
             else Close();
         }

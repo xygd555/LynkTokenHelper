@@ -30,23 +30,34 @@ internal static class WpfTests
         Console.SetError(new StreamWriter(Console.OpenStandardError(), new UTF8Encoding(false)) { AutoFlush = true });
         var application = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         bool interactive = args.Length > 0 && args[0] == "--interactive";
+        bool browserOnly = args.Length > 0 && args[0] == "--browser-login";
         int exitCode = 0;
         Action run = () =>
         {
             try
             {
-                if (args.Length > 0 && args[0] == "--wechat-smoke") ActualMiniProgram();
+                if (args.Length > 1 && args[0] == "--authorization-live")
+                {
+                    output = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "wpf-native"));
+                    Directory.CreateDirectory(output);
+                    ActualBrowserAuthorization(args[1]);
+                }
+                else if (args.Length > 0 && args[0] == "--wechat-smoke") ActualMiniProgram();
                 else
                 {
-                    output = Path.GetFullPath(interactive ? Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "wpf-native") : args.Length > 0 ? args[0] : ".");
+                    output = Path.GetFullPath((interactive || browserOnly) ? Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "wpf-native") : args.Length > 0 ? args[0] : ".");
                     expectedDefaultServer = args.Length > 1 ? args[1] : "";
                     Directory.CreateDirectory(output);
                     for (int pass = 1; pass <= (interactive ? 3 : 1); pass++)
                     {
+                        BrowserLoginWorkflow();
+                        if (!browserOnly)
+                        {
                         MiniProgramWorkflow();
                         MiniProgramUI();
                         MiniProgramLoginReminder();
                         ImportantNoticeWorkflow();
+                        }
                         LoginLayout();
                         NativeWorkflow();
                         SmallWorkArea();
@@ -152,15 +163,100 @@ internal static class WpfTests
     private static void CheckLoginFits(MainWindow window)
     {
         var root = Control<Grid>(window, "Root");
-        foreach (string name in new[] { "LoginCardHost", "Address", "Username", "Password", "LoginButton", "LoginNotice", "BackButton" })
+        foreach (string name in new[] { "LoginCardHost", "Address", "Username", "Password", "LoginButton", "LoginNotice", "BackButton", "BrowserLoginButton", "LoginModeButton", "BrowserLoginActions" })
         {
-            if (Control<FrameworkElement>(window, name).Visibility != Visibility.Visible) continue;
+            if (!Control<FrameworkElement>(window, name).IsVisible) continue;
             Rect bounds = Bounds(window, name);
             Check(bounds.Top >= 0 && bounds.Bottom <= root.ActualHeight && bounds.Left >= 0 && bounds.Right <= root.ActualWidth,
                 name + " exceeds login client area: " + bounds + " / " + root.RenderSize);
         }
         var scroll = window.FindName("LoginView") as ScrollViewer;
         Check(scroll == null || scroll.ExtentHeight <= scroll.ViewportHeight + 1, "login form requires vertical scrolling");
+    }
+    private static void ActualBrowserAuthorization(string address)
+    {
+        Uri server;
+        Check(Uri.TryCreate(address, UriKind.Absolute, out server) && server.Host == "127.0.0.1", "live authorization validation requires an isolated loopback panel");
+        string state = Path.Combine(output, "browser-state-" + Guid.NewGuid().ToString("N"));
+        var window = new MainWindow(new CoreClient(state));
+        window.OpenBrowser = url => File.WriteAllText(Path.Combine(output, "authorization-url.txt"), url, new UTF8Encoding(false));
+        window.Show();
+        try
+        {
+            Control<TextBox>(window, "Address").Text = address;
+            Control<CheckBox>(window, "AllowHttp").IsChecked = true;
+            Until(() => Control<Button>(window, "BrowserLoginButton").IsEnabled);
+            Click(window, "BrowserLoginButton");
+            var watch = Stopwatch.StartNew();
+            while (!Control<FrameworkElement>(window, "MainView").IsVisible && watch.Elapsed < TimeSpan.FromMinutes(2))
+            {
+                Pump();
+                Check(Control<Grid>(window, "ImportantOverlay").Visibility != Visibility.Visible, "actual authorization failed: " + Text(window, "ImportantBody"));
+                Thread.Sleep(10);
+            }
+            Check(Control<FrameworkElement>(window, "MainView").IsVisible && Text(window, "AccountName") == "授权测试用户", "browser authorization did not enter the native main window");
+            Check(Control<TextBox>(window, "Token").Text == "", "authorization test unexpectedly captured credentials");
+            Capture(window, "wpf-browser-authorized-live-100");
+            Console.WriteLine("真实面板网页授权、内核回调和原生主界面切换验证通过。");
+        }
+        finally
+        {
+            if (Control<Grid>(window, "ImportantOverlay").Visibility == Visibility.Visible) Acknowledge(window);
+            window.Close(); Until(() => !window.IsVisible);
+        }
+    }
+    private static void BrowserLoginWorkflow()
+    {
+        foreach (string scenario in new[] { "success", "cancel", "browser-error", "server-switch" })
+        {
+            var core = new FakeCore();
+            var window = new MainWindow(core, workArea: () => new Rect(0, 0, 1400, 1000));
+            int opened = 0;
+            window.OpenBrowser = address => { opened++; Check(address.StartsWith("https://sign.example.com/helper/authorize?request_id="), "browser opened a different server"); if (scenario == "browser-error") throw new InvalidOperationException(); };
+            window.Show(); Until(() => core.Started); core.Emit(); Pump();
+            Check(Control<FrameworkElement>(window, "BrowserLoginPanel").IsVisible && !Control<FrameworkElement>(window, "PasswordLoginPanel").IsVisible, "browser authorization is not the primary entry");
+            if (scenario == "server-switch")
+            {
+                core.Snapshot.state.logged_in = true; core.Emit(); Until(() => Control<FrameworkElement>(window, "MainView").IsVisible);
+                Click(window, "SwitchButton");
+            }
+            Control<TextBox>(window, "Address").Text = "https://sign.example.com";
+            Pump();
+            Capture(window, "wpf-browser-ready-100");
+            Rect before = Bounds(window, "LoginCardHost");
+            Click(window, "BrowserLoginButton");
+            Until(() => opened == 1);
+            if (scenario == "browser-error")
+            {
+                CheckImportantNotice(window, "默认浏览器"); Acknowledge(window);
+                Until(() => Control<Button>(window, "BrowserLoginButton").IsEnabled);
+            }
+            else
+            {
+                Check(!Control<Button>(window, "BrowserLoginButton").IsEnabled && !Control<Button>(window, "LoginModeButton").IsEnabled, "authorization permits conflicting duplicate actions");
+                CheckLoginFits(window);
+                Check(Bounds(window, "LoginCardHost") == before, "authorization pending state moved the login card");
+                core.Emit(); Pump(); Check(opened == 1, "state update opened browser again");
+                Click(window, "ReopenAuthorizationButton"); Check(opened == 2, "reopen authorization did not reuse the current request");
+                Capture(window, "wpf-browser-waiting-100");
+                if (scenario == "cancel")
+                {
+                    Click(window, "CancelBrowserLoginButton"); Until(() => Control<Button>(window, "BrowserLoginButton").IsEnabled);
+                    Click(window, "LoginModeButton"); Check(Control<FrameworkElement>(window, "PasswordLoginPanel").IsVisible, "cancelled authorization did not allow password fallback");
+                }
+                else
+                {
+                    if (scenario == "success") window.WindowState = WindowState.Minimized;
+                    core.Snapshot.pending = core.Snapshot.state.busy = core.Snapshot.state.authorizing = false;
+                    core.Snapshot.state.authorization_url = null;
+                    core.Snapshot.state.logged_in = true; core.Snapshot.state.username = "测试用户"; core.Snapshot.state.server_address = "https://sign.example.com";
+                    core.Emit(); Until(() => Control<FrameworkElement>(window, "MainView").IsVisible);
+                    Check(window.Width == 1040 && window.Height == 720, "authorization did not automatically enter the fixed main window");
+                    Check(window.WindowState == WindowState.Normal && !IsTopmost(window), "authorization did not restore a minimized tool or left permanent topmost enabled");
+                }
+            }
+            window.Close(); Until(() => !window.IsVisible);
+        }
     }
     private static void LoginLayout()
     {
@@ -171,6 +267,10 @@ internal static class WpfTests
             window.Show();
             Until(() => core.Started);
             core.Emit(); Pump();
+            CheckLoginFits(window);
+            Capture(window, area.Height == 600 ? "wpf-browser-login-small-100" : "wpf-browser-login-100");
+            if (area.Height == 1000) Capture(window, "wpf-browser-login-150", 1.5);
+            Click(window, "LoginModeButton");
             CheckLoginFits(window);
             double buttonTop = Bounds(window, "LoginButton").Top;
             core.Snapshot.state.message = "请先在面板修改初始密码，再登录工具";
@@ -250,6 +350,7 @@ internal static class WpfTests
         Until(() => Text(window, "LoginButtonText") == "登录服务器");
         Check(Control<TextBox>(window, "Address").Text == expectedDefaultServer, "build-time default server was not prefilled");
         Check(window.ResizeMode == ResizeMode.CanMinimize && window.Width == 520 && window.Height == 700, "login window is not fixed");
+        Click(window, "LoginModeButton");
         Control<TextBox>(window, "Address").Text = "https://sign.example.com:8443/lynk";
         Control<TextBox>(window, "Username").Text = "测试用户";
         Control<PasswordBox>(window, "Password").Password = "synthetic-password";
@@ -771,6 +872,17 @@ internal static class WpfTests
                     var values = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(new JavaScriptSerializer().Serialize(input));
                     Check((string)values["Username"] == "测试用户" && (string)values["Password"] == "synthetic-password", "native login input changed");
                     Snapshot.state.logged_in = true; Snapshot.state.username = "周末去看海"; Snapshot.state.server_address = "https://sign.example.com"; Snapshot.state.message = "服务器登录成功"; Snapshot.token = null; Snapshot.state.candidates = null; Snapshot.state.submission = null; Snapshot.state.confirmation_required = false;
+                    break;
+                case "login/browser":
+                    var browserInput = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(new JavaScriptSerializer().Serialize(input));
+                    Check(!browserInput.ContainsKey("Password") && !browserInput.ContainsKey("Username"), "browser login sent account credentials");
+                    Snapshot.state.logged_in = false; Snapshot.pending = Snapshot.state.busy = Snapshot.state.authorizing = true;
+                    Snapshot.state.authorization_url = "https://sign.example.com/helper/authorize?request_id=" + new string('r', 43);
+                    Snapshot.state.message = "请在浏览器中确认授权。";
+                    break;
+                case "login/cancel":
+                    Snapshot.pending = Snapshot.state.busy = Snapshot.state.authorizing = false; Snapshot.state.authorization_url = null;
+                    Snapshot.state.message = "网页授权已取消，可以重新授权或使用账号密码登录。";
                     break;
                 case "certificate/install": Snapshot.state.trusted = true; break;
                 case "start": Snapshot.state.capturing = true; Snapshot.state.message = "等待领克登录流量，请点击工具里的“打开领克小程序”。未获取到凭据时，请登录或退出账号后重新登录。"; break;

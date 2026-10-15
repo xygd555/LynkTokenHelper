@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"strconv"
 	"sync"
@@ -16,6 +17,8 @@ type candidateView struct {
 }
 type appStatus struct {
 	Message              string          `json:"message"`
+	Authorizing          bool            `json:"authorizing"`
+	AuthorizationURL     string          `json:"authorization_url"`
 	LoggedIn             bool            `json:"logged_in"`
 	Username             string          `json:"username"`
 	ServerAddress        string          `json:"server_address"`
@@ -94,11 +97,12 @@ func (a *app) execute(ctx context.Context, action string, input actionInput) err
 	defer func() { a.mu.Lock(); a.status.Busy = false; a.mu.Unlock() }()
 	var err error
 	switch action {
-	case "login":
+	case "login", "login/browser":
 		if err = a.stopCapture(false); err != nil {
 			break
 		}
 		a.mu.Lock()
+		previousPanel := a.panel
 		a.panel = nil
 		a.status.LoggedIn = false
 		a.status.Username = ""
@@ -112,6 +116,7 @@ func (a *app) execute(ctx context.Context, action string, input actionInput) err
 		a.status.SelectedCandidate = 0
 		a.status.Account = accountInfo{}
 		a.mu.Unlock()
+		previousPanel.revokeHelperSession()
 		settings, readErr := readProxy()
 		if readErr != nil {
 			err = readErr
@@ -122,9 +127,26 @@ func (a *app) execute(ctx context.Context, action string, input actionInput) err
 			err = proxyErr
 			break
 		}
-		panel, loginErr := loginPanel(ctx, input.Address, input.Username, input.Password, input.AllowHTTP, upstream)
+		var panel *panelClient
+		var loginErr error
+		if action == "login/browser" {
+			a.mu.Lock()
+			a.status.Authorizing = true
+			a.status.Message = "请在浏览器中确认授权。"
+			a.mu.Unlock()
+			defer func() { a.mu.Lock(); a.status.Authorizing = false; a.status.AuthorizationURL = ""; a.mu.Unlock() }()
+			panel, loginErr = loginPanelBrowser(ctx, input.Address, input.AllowHTTP, upstream, func(address string) { a.mu.Lock(); a.status.AuthorizationURL = address; a.mu.Unlock() })
+		} else {
+			panel, loginErr = loginPanel(ctx, input.Address, input.Username, input.Password, input.AllowHTTP, upstream)
+		}
 		input.Password = ""
 		if loginErr != nil {
+			if errors.Is(loginErr, errAuthorizationDenied) || errors.Is(ctx.Err(), context.Canceled) {
+				a.mu.Lock()
+				a.status.Message = "网页授权已取消，可以重新授权或使用账号密码登录。"
+				a.mu.Unlock()
+				break
+			}
 			err = loginErr
 			break
 		}
@@ -215,6 +237,9 @@ func (a *app) shutdown() error {
 	a.operations.Lock()
 	defer a.operations.Unlock()
 	err := a.stopCapture(false)
+	if err == nil {
+		a.panel.revokeHelperSession()
+	}
 	if err != nil {
 		a.mu.Lock()
 		a.closing = false

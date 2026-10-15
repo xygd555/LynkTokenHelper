@@ -17,6 +17,7 @@ type panelClient struct {
 	base           string
 	client         *http.Client
 	csrf, username string
+	accessToken    string
 }
 type accountInfo struct {
 	ID          string `json:"id"`
@@ -30,7 +31,7 @@ type importResult struct {
 	PreviousAccountID    string      `json:"previous_account_id"`
 }
 
-func loginPanel(ctx context.Context, address, username, password string, allowHTTP bool, upstream *url.URL) (*panelClient, error) {
+func newPanelClient(address string, allowHTTP bool, upstream *url.URL) (*panelClient, error) {
 	u, err := url.Parse(strings.TrimRight(strings.TrimSpace(address), "/"))
 	if err != nil || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Scheme != "https" && u.Scheme != "http") {
 		return nil, fmt.Errorf("请填写完整的 HTTP 或 HTTPS 服务器地址")
@@ -45,7 +46,14 @@ func loginPanel(ctx context.Context, address, username, password string, allowHT
 		transport.Proxy = http.ProxyURL(upstream)
 	}
 	client := &http.Client{Jar: jar, Transport: transport, Timeout: 70 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	panel := &panelClient{base: strings.TrimRight(u.String(), "/"), client: client}
+	return &panelClient{base: strings.TrimRight(u.String(), "/"), client: client}, nil
+}
+
+func loginPanel(ctx context.Context, address, username, password string, allowHTTP bool, upstream *url.URL) (*panelClient, error) {
+	panel, err := newPanelClient(address, allowHTTP, upstream)
+	if err != nil {
+		return nil, err
+	}
 	var login struct {
 		CSRF       string `json:"csrf_token"`
 		MustChange bool   `json:"must_change_password"`
@@ -60,6 +68,13 @@ func loginPanel(ctx context.Context, address, username, password string, allowHT
 	if login.MustChange {
 		return nil, fmt.Errorf("请先在面板修改初始密码，再登录工具")
 	}
+	if err := panel.checkIdentity(ctx); err != nil {
+		return nil, err
+	}
+	return panel, nil
+}
+
+func (panel *panelClient) checkIdentity(ctx context.Context) error {
 	var me struct {
 		Username    string `json:"username"`
 		Entitlement struct {
@@ -67,13 +82,13 @@ func loginPanel(ctx context.Context, address, username, password string, allowHT
 		} `json:"entitlement"`
 	}
 	if err := panel.call(ctx, "/api/auth/me", nil, &me); err != nil {
-		return nil, err
+		return err
 	}
 	if !me.Entitlement.Active {
-		return nil, fmt.Errorf("账号权益已到期，请先在面板续期")
+		return fmt.Errorf("账号权益已到期，请先在面板续期")
 	}
 	panel.username = me.Username
-	return panel, nil
+	return nil
 }
 
 func (p *panelClient) call(ctx context.Context, path string, input, output any) error {
@@ -92,7 +107,10 @@ func (p *panelClient) call(ctx context.Context, path string, input, output any) 
 		return fmt.Errorf("服务器地址无效")
 	}
 	r.Header.Set("Content-Type", "application/json")
-	if p.csrf != "" {
+	if p.accessToken != "" {
+		r.Header.Set("Authorization", "Bearer "+p.accessToken)
+	}
+	if p.csrf != "" && p.accessToken == "" {
 		r.Header.Set("X-CSRF-Token", p.csrf)
 	}
 	response, err := p.client.Do(r)
@@ -110,9 +128,12 @@ func (p *panelClient) call(ctx context.Context, path string, input, output any) 
 			Code string `json:"code"`
 		}
 		_ = json.Unmarshal(raw, &failure)
-		messages := map[string]string{"auth_required": "面板登录已过期，请重新登录", "membership_expired": "账号权益已到期", "account_verify_failed": "领克凭据验证失败，请重新登录小程序后再试", "account_changed": "服务器账号配置已变更，请重新抓取", "confirmation_expired": "换绑确认已过期，请重新抓取", "csrf_failed": "登录校验已过期，请重新登录"}
+		messages := map[string]string{"auth_required": "面板登录已过期，请重新登录", "membership_expired": "账号权益已到期", "account_verify_failed": "领克凭据验证失败，请重新登录小程序后再试", "account_changed": "服务器账号配置已变更，请重新抓取", "confirmation_expired": "换绑确认已过期，请重新抓取", "csrf_failed": "登录校验已过期，请重新登录", "invalid_grant": "网页授权已过期或校验失败，请重新授权", "authorization_expired": "网页授权已过期，请重新授权", "authorization_rate_limited": "网页授权请求过于频繁，请稍后重试", "helper_scope_denied": "工具授权权限不足，请重新授权"}
 		if message := messages[failure.Code]; message != "" {
 			return fmt.Errorf("%s", message)
+		}
+		if response.StatusCode == 404 && strings.HasPrefix(path, "/api/helper/") {
+			return fmt.Errorf("网页授权需要面板 v1.4.0 或更高版本，请更新面板或使用账号密码登录")
 		}
 		if response.StatusCode == 404 {
 			return fmt.Errorf("服务器接口不存在，请先更新服务端至 v1.1.0 或更高版本")

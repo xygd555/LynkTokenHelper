@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -106,6 +107,13 @@ func runCore(app *app, input io.Reader, output io.Writer) error {
 	if err := write(); err != nil {
 		return err
 	}
+	var operationCancel context.CancelFunc
+	var pendingAction string
+	defer func() {
+		if operationCancel != nil {
+			operationCancel()
+		}
+	}()
 	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
 	for {
@@ -114,7 +122,11 @@ func runCore(app *app, input io.Reader, output io.Writer) error {
 			if !ok {
 				return app.shutdown()
 			}
-			if request.Type == "close" {
+			if request.Type == "command" && request.Action == "login/cancel" {
+				if session.pending && pendingAction == "login/browser" && operationCancel != nil {
+					operationCancel()
+				}
+			} else if request.Type == "close" {
 				if !session.closing {
 					session.closing = true
 					go func() { results <- coreResult{"close", app.shutdown()} }()
@@ -129,7 +141,7 @@ func runCore(app *app, input io.Reader, output io.Writer) error {
 					}
 				case "command":
 					switch request.Action {
-					case "login", "certificate/install", "certificate/remove", "start", "stop", "restore", "submit", "confirm", "cancel":
+					case "login", "login/browser", "certificate/install", "certificate/remove", "start", "stop", "restore", "submit", "confirm", "cancel":
 						state := app.currentStatus()
 						if (request.Action == "submit" && (state.Capturing || state.ConfirmationRequired)) || (request.Action == "start" && state.ConfirmationRequired) {
 							break
@@ -140,8 +152,10 @@ func runCore(app *app, input io.Reader, output io.Writer) error {
 						session.requestID = request.ID
 						session.pending = true
 						session.lastError = ""
+						operationContext, cancelOperation := context.WithCancel(app.context())
+						operationCancel, pendingAction = cancelOperation, request.Action
 						go func() {
-							err := app.execute(app.context(), request.Action, request.Input)
+							err := app.execute(operationContext, request.Action, request.Input)
 							request.Input.Password = ""
 							results <- coreResult{request.Action, err}
 						}()
@@ -160,6 +174,11 @@ func runCore(app *app, input io.Reader, output io.Writer) error {
 				}
 				session.closing = false
 			} else {
+				if operationCancel != nil {
+					operationCancel()
+					operationCancel = nil
+				}
+				pendingAction = ""
 				session.pending = false
 			}
 		case <-ticker.C:

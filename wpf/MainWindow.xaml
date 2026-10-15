@@ -26,31 +26,47 @@
             <Image Source="{StaticResource AppLogo}" Width="40" Height="40" HorizontalAlignment="Left" AutomationProperties.Name="lynk 项目图标" />
             <TextBlock Grid.Column="1" Text="连接服务器" FontSize="24" FontWeight="SemiBold" VerticalAlignment="Center" />
             <Button x:Name="BackButton" Grid.Column="2" Content="返回" Style="{StaticResource Subtle}" Padding="8,0" Click="BackClicked" Visibility="Hidden" ToolTip="返回工作台" AutomationProperties.Name="返回工作台" />
-            <TextBlock x:Name="LoginSubtitle" Grid.Row="1" Grid.ColumnSpan="3" Text="使用 Lynk Sign 面板账号登录" Style="{StaticResource Muted}" Margin="0,8,0,0" />
+            <TextBlock x:Name="LoginSubtitle" Grid.Row="1" Grid.ColumnSpan="3" Text="通过网页授权连接面板" Style="{StaticResource Muted}" Margin="0,8,0,0" />
           </Grid>
           <TextBlock x:Name="AddressLabel" Text="服务器地址" Margin="0,0,0,6" />
           <TextBox x:Name="Address" AutomationProperties.Name="服务器地址" Height="42" TextChanged="LoginInputChanged" ToolTip="完整的 HTTP 或 HTTPS 面板地址，可包含端口和子路径" />
-          <TextBlock x:Name="UsernameLabel" Text="面板账号" Margin="0,14,0,6" />
-          <TextBox x:Name="Username" AutomationProperties.Name="面板账号" Height="42" TextChanged="LoginInputChanged" />
-          <TextBlock x:Name="PasswordLabel" Text="面板密码" Margin="0,14,0,6" />
-          <Grid>
-            <Grid.ColumnDefinitions>
-              <ColumnDefinition />
-              <ColumnDefinition Width="40" />
-            </Grid.ColumnDefinitions>
-            <PasswordBox x:Name="Password" AutomationProperties.Name="面板密码" Height="42" PasswordChanged="PasswordChanged" />
-            <TextBox x:Name="VisiblePassword" AutomationProperties.Name="显示的面板密码" Height="42" Visibility="Collapsed" TextChanged="VisiblePasswordChanged" />
-            <Button x:Name="TogglePassword" Grid.Column="1" Style="{StaticResource Subtle}" Click="TogglePasswordClicked" ToolTip="显示密码" AutomationProperties.Name="显示或隐藏密码">
-              <Path x:Name="PasswordIcon" Data="{StaticResource Icon_eye}" Style="{StaticResource Icon}" />
-            </Button>
-          </Grid>
           <CheckBox x:Name="AllowHttp" Content="允许内网 HTTP 明文连接" Margin="0,18,0,18" />
-          <Button x:Name="LoginButton" Style="{StaticResource Primary}" Click="LoginClicked" IsEnabled="False">
-            <StackPanel Orientation="Horizontal">
-              <TextBlock x:Name="LoginButtonText" Text="正在准备…" Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
-              <Path Data="{StaticResource Icon_arrow_right}" Style="{StaticResource Icon}" Margin="12,0,0,0" />
-            </StackPanel>
-          </Button>
+          <StackPanel x:Name="BrowserLoginPanel">
+            <TextBlock x:Name="BrowserLoginHint" Height="42" Text="在系统浏览器中登录面板，确认授权后自动进入工具。" Foreground="{StaticResource MutedBrush}" FontSize="13" LineHeight="21" Margin="0,0,0,20" />
+            <Button x:Name="BrowserLoginButton" Style="{StaticResource Primary}" Click="BrowserLoginClicked" IsEnabled="False" Height="44">
+              <StackPanel Orientation="Horizontal">
+                <Path Data="{StaticResource Icon_arrow_exit}" Style="{StaticResource Icon}" Margin="0,0,10,0" />
+                <TextBlock x:Name="BrowserLoginButtonText" Text="正在准备…" Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
+              </StackPanel>
+            </Button>
+            <Grid x:Name="BrowserLoginActions" Height="36" Margin="0,12,0,0" Visibility="Collapsed">
+              <Button x:Name="ReopenAuthorizationButton" Content="重新打开授权页" Style="{StaticResource Subtle}" HorizontalAlignment="Left" Click="ReopenAuthorizationClicked" />
+              <Button x:Name="CancelBrowserLoginButton" Content="取消" Style="{StaticResource Subtle}" HorizontalAlignment="Right" Click="CancelBrowserLoginClicked" />
+            </Grid>
+          </StackPanel>
+          <StackPanel x:Name="PasswordLoginPanel" Visibility="Collapsed">
+            <TextBlock x:Name="UsernameLabel" Text="面板账号" Margin="0,14,0,6" />
+            <TextBox x:Name="Username" AutomationProperties.Name="面板账号" Height="42" TextChanged="LoginInputChanged" />
+            <TextBlock x:Name="PasswordLabel" Text="面板密码" Margin="0,14,0,6" />
+            <Grid>
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition />
+                <ColumnDefinition Width="40" />
+              </Grid.ColumnDefinitions>
+              <PasswordBox x:Name="Password" AutomationProperties.Name="面板密码" Height="42" PasswordChanged="PasswordChanged" />
+              <TextBox x:Name="VisiblePassword" AutomationProperties.Name="显示的面板密码" Height="42" Visibility="Collapsed" TextChanged="VisiblePasswordChanged" />
+              <Button x:Name="TogglePassword" Grid.Column="1" Style="{StaticResource Subtle}" Click="TogglePasswordClicked" ToolTip="显示密码" AutomationProperties.Name="显示或隐藏密码">
+                <Path x:Name="PasswordIcon" Data="{StaticResource Icon_eye}" Style="{StaticResource Icon}" />
+              </Button>
+            </Grid>
+            <Button x:Name="LoginButton" Style="{StaticResource Primary}" Click="LoginClicked" IsEnabled="False">
+              <StackPanel Orientation="Horizontal">
+                <TextBlock x:Name="LoginButtonText" Text="正在准备…" Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
+                <Path Data="{StaticResource Icon_arrow_right}" Style="{StaticResource Icon}" Margin="12,0,0,0" />
+              </StackPanel>
+            </Button>
+          </StackPanel>
+          <Button x:Name="LoginModeButton" Content="使用账号密码登录" Style="{StaticResource Subtle}" Height="36" Margin="0,12,0,0" Click="LoginModeClicked" />
           <Grid x:Name="LoginNoticeHost" Height="48" Margin="0,12,0,0">
             <TextBlock x:Name="LoginNotice" Foreground="#EDB5B7" FontSize="13" LineHeight="20" VerticalAlignment="Center" Visibility="Hidden" ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}" />
           </Grid>
