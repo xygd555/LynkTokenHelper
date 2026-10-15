@@ -44,7 +44,7 @@ LYNK_HELPER_REPOSITORY=https://github.com/xygd555/LynkTokenHelper
 - 支持直连和常见 HTTP 手动上游代理。PAC、仅 SOCKS 上游代理、HTTP 与 HTTPS 分别使用不同代理暂不支持，会在修改设置前提示。
 - 微信是否使用系统代理、是否信任当前用户证书，需要在具体版本中实测。获取等待时间为 10 分钟；连接计数不代表已获得有效凭据。
 - 工具不保存密码、面板会话、领克 Token 或完整抓包文件。本次凭据只在内存中保留，复制内容由 Windows 剪贴板管理。
-- 每个状态目录生成独有 CA，私钥由当前 Windows 用户的 DPAPI 加密。证书、代理恢复信息及内嵌内核缓存放在 EXE 旁的 `state/`，抓取期间不要移动或删除。
+- 证书、代理恢复信息及内嵌内核缓存统一保存在 `%LOCALAPPDATA%\LynkTokenHelper`（通常为 `C:\Users\用户名\AppData\Local\LynkTokenHelper`），不在 EXE 旁生成文件夹。同一 Windows 用户移动或更新 EXE 时复用该目录及证书，无需重复安装；私钥由当前用户的 DPAPI 加密。抓取期间不要移动或删除该目录。开发排查仍可通过 `--data-dir` 指定其他状态目录。
 - EXE 内嵌 WPF 界面和 Go 抓包内核，通过匿名管道通信。工具尚未进行代码签名。
 
 ## 本地构建与验证

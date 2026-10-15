@@ -9,7 +9,7 @@ namespace LynkSignTokenHelper
         [STAThread]
         public static void Main(string[] args)
         {
-            string directory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "state");
+            string directory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "LynkTokenHelper");
             bool restoreOnly = false;
             for (int index = 0; index < args.Length; index++)
             {

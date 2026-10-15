@@ -11,8 +11,7 @@ import (
 var defaultServer string
 
 func main() {
-	executable, _ := os.Executable()
-	dir := flag.String("data-dir", filepath.Join(filepath.Dir(executable), "state"), "本机状态目录")
+	dir := flag.String("data-dir", "", "本机状态目录，默认当前用户的本地应用数据目录")
 	watch := flag.Int("watch-parent", 0, "等待主进程退出后恢复代理")
 	restore := flag.Bool("restore-proxy", false, "恢复本工具修改的代理后退出")
 	stdio := flag.Bool("stdio", false, "通过进程管道连接桌面窗口")
@@ -23,6 +22,14 @@ func main() {
 		} else {
 			showDesktopError(message)
 		}
+	}
+	if *dir == "" {
+		cache, err := os.UserCacheDir()
+		if err != nil {
+			report("无法获取当前用户的本地应用数据目录：" + err.Error())
+			return
+		}
+		*dir = filepath.Join(cache, "LynkTokenHelper")
 	}
 	if err := os.MkdirAll(*dir, 0700); err != nil {
 		if *watch == 0 {
