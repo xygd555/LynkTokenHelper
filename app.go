@@ -288,7 +288,7 @@ func (a *app) startCapture() error {
 	a.status.Connections = 0
 	a.status.LynkRequests = 0
 	a.status.Account = accountInfo{}
-	a.status.Message = "等待领克登录流量，请在电脑微信打开领克小程序并重新登录。"
+	a.status.Message = "等待领克登录流量，请点击工具里的“打开领克小程序”。未获取到凭据时，请登录或退出账号后重新登录。"
 	a.mu.Unlock()
 	a.timer = time.AfterFunc(10*time.Minute, func() {
 		a.operations.Lock()

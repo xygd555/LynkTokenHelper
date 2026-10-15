@@ -13,6 +13,7 @@ using System.Web.Script.Serialization;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Interop;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
@@ -25,30 +26,60 @@ internal static class WpfTests
     [STAThread]
     public static int Main(string[] args)
     {
-        try
+        Console.SetOut(new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false)) { AutoFlush = true });
+        Console.SetError(new StreamWriter(Console.OpenStandardError(), new UTF8Encoding(false)) { AutoFlush = true });
+        var application = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+        bool interactive = args.Length > 0 && args[0] == "--interactive";
+        int exitCode = 0;
+        Action run = () =>
         {
-            if (args.Length > 0 && args[0] == "--wechat-smoke")
+            try
             {
-                var smokeApplication = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
-                ActualMiniProgram();
-                return 0;
+                if (args.Length > 0 && args[0] == "--wechat-smoke") ActualMiniProgram();
+                else
+                {
+                    output = Path.GetFullPath(interactive ? Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "wpf-native") : args.Length > 0 ? args[0] : ".");
+                    expectedDefaultServer = args.Length > 1 ? args[1] : "";
+                    Directory.CreateDirectory(output);
+                    for (int pass = 1; pass <= (interactive ? 3 : 1); pass++)
+                    {
+                        MiniProgramWorkflow();
+                        MiniProgramUI();
+                        MiniProgramLoginReminder();
+                        ImportantNoticeWorkflow();
+                        LoginLayout();
+                        NativeWorkflow();
+                        SmallWorkArea();
+                        FatalPreservesBackup();
+                        ActualCorePipe();
+                        ActualCoreDisconnect();
+                        Console.WriteLine("WPF 第 " + pass + " 次原生交互与布局验证通过。");
+                    }
+                    if (interactive) ActualMiniProgram();
+                }
             }
-            output = Path.GetFullPath(args.Length > 0 ? args[0] : ".");
-            expectedDefaultServer = args.Length > 1 ? args[1] : "";
-            Directory.CreateDirectory(output);
-            var application = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
-            MiniProgramWorkflow();
-            MiniProgramUI();
-            LoginLayout();
-            NativeWorkflow();
-            SmallWorkArea();
-            FatalPreservesBackup();
-            ActualCorePipe();
-            ActualCoreDisconnect();
-            Console.WriteLine("WPF 原生交互、固定窗口、小工作区与真实内核管道验证通过。");
-            return 0;
+            catch (Exception error) { Console.Error.WriteLine(error); exitCode = 1; }
+            finally { application.Shutdown(exitCode); }
+        };
+        if (interactive)
+        {
+            var start = new Button { Content = "开始验证", Height = 42, Margin = new Thickness(0, 18, 0, 0) };
+            var content = new StackPanel { Margin = new Thickness(24) };
+            content.Children.Add(new TextBlock { Text = "请点击开始验证，然后约一分钟内不要操作其他窗口。测试使用模拟凭据，不会启用真实抓包。", TextWrapping = TextWrapping.Wrap, FontSize = 14 });
+            content.Children.Add(start);
+            var gate = new Window { Title = "领克助手 · 界面验证", Width = 440, Height = 210, ResizeMode = ResizeMode.NoResize, WindowStartupLocation = WindowStartupLocation.CenterScreen, Content = content, Topmost = true };
+            start.Click += (sender, eventArgs) =>
+            {
+                gate.Topmost = false;
+                start.IsEnabled = false;
+                start.Content = "正在验证，请稍候…";
+                application.Dispatcher.BeginInvoke(run);
+            };
+            gate.Closed += (sender, eventArgs) => { if (start.IsEnabled) application.Shutdown(1); };
+            gate.Show();
         }
-        catch (Exception error) { Console.Error.WriteLine(error); return 1; }
+        else application.Dispatcher.BeginInvoke(run);
+        return application.Run();
     }
     private static void Check(bool condition, string message)
     {
@@ -80,6 +111,37 @@ internal static class WpfTests
         var operation = window.Dispatcher.InvokeAsync(() => button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)));
         Until(() => operation.Status == DispatcherOperationStatus.Completed);
         Pump();
+    }
+    private static void Acknowledge(MainWindow window)
+    {
+        Check(Control<Grid>(window, "ImportantOverlay").Visibility == Visibility.Visible, "important notice not visible");
+        Click(window, "ImportantConfirmButton");
+    }
+    private static void CheckImportantNotice(MainWindow window, string body)
+    {
+        Until(() => Control<Grid>(window, "ImportantOverlay").Visibility == Visibility.Visible);
+        Check(Text(window, "ImportantBody").Contains(body), "unexpected important notice: " + Text(window, "ImportantBody"));
+        var confirm = Control<Button>(window, "ImportantConfirmButton");
+        Check(FocusManager.GetFocusedElement(window) == confirm, "important notice did not focus its confirmation button");
+        confirm.MoveFocus(new TraversalRequest(FocusNavigationDirection.Next));
+        Check(FocusManager.GetFocusedElement(window) == confirm, "keyboard focus escaped the important notice");
+        Check(!Control<FrameworkElement>(window, "MainView").IsEnabled && !Control<FrameworkElement>(window, "LoginView").IsEnabled, "notice did not block underlying actions");
+        Rect card = Bounds(window, "ImportantCard");
+        Rect button = Bounds(window, "ImportantConfirmButton");
+        var root = Control<Grid>(window, "Root");
+        Check(card.Left >= 0 && card.Top >= 0 && card.Right <= root.ActualWidth && card.Bottom <= root.ActualHeight, "important notice exceeds window bounds");
+        Check(button.Bottom <= card.Bottom && button.Right <= card.Right, "acknowledgement button exceeds notice bounds");
+    }
+    private static void PressKey(MainWindow window, Key key)
+    {
+        var args = new KeyEventArgs(Keyboard.PrimaryDevice, PresentationSource.FromVisual(window), 0, key) { RoutedEvent = Keyboard.PreviewKeyDownEvent };
+        window.RaiseEvent(args);
+        Pump();
+    }
+    private static void ObserveFor(TimeSpan duration)
+    {
+        var watch = Stopwatch.StartNew();
+        while (watch.Elapsed < duration) { Pump(); Thread.Sleep(10); }
     }
     private static Rect Bounds(MainWindow window, string name)
     {
@@ -168,6 +230,8 @@ internal static class WpfTests
         Until(() => Control<Button>(window, "CopyTokenButton").IsEnabled);
         core.Fail();
         Until(() => Text(window, "NoticeBody") == "内核连接测试失败");
+        CheckImportantNotice(window, "内核连接测试失败");
+        Acknowledge(window);
         Check(!Control<Button>(window, "SubmitButton").IsEnabled, "dead core allowed new command");
         Click(window, "CopyTokenButton");
         Check(copied == "rt_first_synthetic", "core failure lost backup token");
@@ -246,6 +310,9 @@ internal static class WpfTests
         Until(() => Control<TextBox>(window, "Token").Text == core.LongToken);
         Click(window, "SubmitButton");
         Until(() => Text(window, "NoticeTitle").Contains("Token 已保留"));
+        CheckImportantNotice(window, "HTTP 503");
+        Capture(window, "wpf-submit-error-dialog-100");
+        Acknowledge(window);
         Check(Control<Button>(window, "SubmitButton").IsEnabled && Control<TextBox>(window, "Token").Text == core.LongToken, "failed submit lost token or retry");
         CheckMainFits(window);
         Capture(window, "wpf-failure-100");
@@ -257,6 +324,8 @@ internal static class WpfTests
         Capture(window, "wpf-confirmation-200", 2);
         Click(window, "ConfirmButton");
         Until(() => Text(window, "NoticeTitle") == "换绑确认未完成");
+        CheckImportantNotice(window, "HTTP 503");
+        Acknowledge(window);
         Check(Control<Button>(window, "ConfirmButton").IsEnabled && Control<Button>(window, "CopyTokenButton").IsEnabled, "confirmation retry blocked");
         Click(window, "ConfirmButton");
         Until(() => Text(window, "NoticeTitle") == "已保存到服务器");
@@ -271,7 +340,8 @@ internal static class WpfTests
         Check(Control<Button>(window, "CopyTokenButton").IsEnabled && Control<TextBox>(window, "Token").Text == "rt_first_synthetic", "cancel discarded backup");
         window.CopyText = value => throw new IOException();
         Click(window, "CopyTokenButton");
-        Check(Text(window, "ToastText").Contains("剪贴板"), "clipboard failure was not visible");
+        CheckImportantNotice(window, "剪贴板");
+        Acknowledge(window);
         window.CopyText = value => copied = value;
         Click(window, "SwitchButton");
         Until(() => Control<FrameworkElement>(window, "LoginView").Visibility == Visibility.Visible);
@@ -283,6 +353,8 @@ internal static class WpfTests
         Until(() => Control<ScrollViewer>(window, "MainView").Visibility == Visibility.Visible);
         core.FailFirstClose = true;
         window.Close();
+        Until(() => Text(window, "ImportantBody").Contains("代理恢复测试失败"));
+        Acknowledge(window);
         Until(() => Control<Button>(window, "RestoreButton").IsEnabled);
         Check(window.IsVisible, "restore failure closed window");
         window.Close();
@@ -420,6 +492,9 @@ internal static class WpfTests
         desktop = new FakeMiniProgramDesktop { Available = false, Count = 1 };
         MiniProgramFailure(desktop, "安装");
         Check(desktop.Calls.Count == 0, "missing WeChat closed an existing window");
+        desktop = new FakeMiniProgramDesktop { Running = false, Count = 1 };
+        MiniProgramFailure(desktop, "微信尚未打开");
+        Check(desktop.Calls.Count == 0, "unopened WeChat changed existing windows");
         desktop = new FakeMiniProgramDesktop { Count = 2 };
         MiniProgramFailure(desktop, "多个");
         Check(desktop.Calls.Count == 0, "ambiguous WeChat windows were changed");
@@ -427,7 +502,7 @@ internal static class WpfTests
         MiniProgramFailure(desktop, "没有关闭");
         Check(desktop.Calls.SequenceEqual(new[] { "close:1" }), "failed close still launched another instance");
         desktop = new FakeMiniProgramDesktop { RefuseOpen = true };
-        MiniProgramFailure(desktop, "确认微信已登录");
+        MiniProgramFailure(desktop, "登录页面");
         Check(desktop.Calls.SequenceEqual(new[] { "launch" }), "open timeout retried unexpectedly");
         desktop = new FakeMiniProgramDesktop { Count = 1 };
         using (var cancellation = new CancellationTokenSource())
@@ -455,6 +530,7 @@ internal static class WpfTests
         Rect panelBounds = Bounds(window, "CapturePanel");
         CheckMainFits(window);
         Click(window, "MiniProgramButton");
+        WaitForRender();
         Check(!Control<Button>(window, "MiniProgramButton").IsEnabled && Text(window, "MiniProgramButtonText") == "正在打开…", "open action has no pending feedback");
         Check(IsTopmost(window), "helper is not kept above WeChat during launch");
         var competingWindow = new Window { Title = "窗口层级测试", Width = 300, Height = 200, ShowInTaskbar = false };
@@ -465,7 +541,7 @@ internal static class WpfTests
         Control<Button>(window, "MiniProgramButton").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
         Check(launcher.Calls == 1, "duplicate click launched WeChat twice");
         core.Snapshot.state.capturing = true;
-        core.Snapshot.state.message = "等待领克登录流量，请在电脑微信打开领克小程序并重新登录。";
+        core.Snapshot.state.message = "等待领克登录流量，请点击工具里的“打开领克小程序”。未获取到凭据时，请登录或退出账号后重新登录。";
         core.Emit(); Pump();
         Check(Bounds(window, "MiniProgramButton") == buttonBounds && Bounds(window, "CapturePanel") == panelBounds, "open progress or capture changed the panel layout");
         Check(IsTopmost(window), "capture state update removed temporary topmost state");
@@ -478,8 +554,10 @@ internal static class WpfTests
         Capture(window, "wpf-mini-program-opened-100");
         Click(window, "MiniProgramButton");
         launcher.Pending.SetException(new InvalidOperationException("请先登录电脑版微信。"));
-        Until(() => Control<Button>(window, "MiniProgramButton").IsEnabled);
-        Check(Text(window, "ToastText") == "请先登录电脑版微信。", "open error was not visible");
+        Until(() => Control<Grid>(window, "ImportantOverlay").Visibility == Visibility.Visible);
+        CheckImportantNotice(window, "请先登录电脑版微信。");
+        Capture(window, "wpf-mini-program-error-dialog-100");
+        Acknowledge(window);
         Check(!window.Topmost && !IsTopmost(window), "failed launch left the helper permanently topmost");
         Click(window, "MiniProgramButton");
         launcher.Pending.SetCanceled();
@@ -495,6 +573,98 @@ internal static class WpfTests
         window.Close();
         Until(() => !window.IsVisible);
         Check(launcher.Pending.Task.IsCanceled, "closing helper did not cancel pending mini program operation");
+    }
+    private static void MiniProgramLoginReminder()
+    {
+        foreach (string scenario in new[] { "missing", "old-token", "captured", "captured-during-open", "stopped-during-open", "restarted-during-open", "stopped", "restarted", "server", "not-capturing" })
+        {
+            var core = new FakeCore();
+            var launcher = new FakeMiniProgramLauncher();
+            var window = new MainWindow(core, miniProgramLauncher: launcher, miniProgramCaptureDelay: TimeSpan.FromMilliseconds(150));
+            window.Show();
+            Until(() => core.Started);
+            core.Snapshot.state.logged_in = core.Snapshot.state.trusted = true;
+            core.Snapshot.state.server_address = "https://sign.example.com";
+            core.Snapshot.state.capturing = scenario != "not-capturing";
+            if (scenario == "old-token") { core.Snapshot.token = "rt_previous_synthetic"; core.Snapshot.state.captured_at = "2026-10-15T09:00:00+08:00"; }
+            core.Emit();
+            Until(() => Control<Button>(window, "MiniProgramButton").IsEnabled);
+            Click(window, "MiniProgramButton");
+            if (scenario == "captured-during-open") { core.Capture(); Pump(); }
+            if (scenario == "stopped-during-open" || scenario == "restarted-during-open")
+            {
+                Click(window, "StopButton");
+                Until(() => Control<Button>(window, "StartButton").Visibility == Visibility.Visible);
+                if (scenario == "restarted-during-open") { Click(window, "StartButton"); Until(() => Control<Button>(window, "StopButton").Visibility == Visibility.Visible); }
+            }
+            launcher.Pending.SetResult(false);
+            Until(() => Text(window, "ToastText").Contains("已打开"));
+            if (scenario == "captured") { core.Capture(); Pump(); }
+            if (scenario == "stopped" || scenario == "restarted")
+            {
+                Click(window, "StopButton");
+                Until(() => Control<Button>(window, "StartButton").Visibility == Visibility.Visible);
+                if (scenario == "restarted") { Click(window, "StartButton"); Until(() => Control<Button>(window, "StopButton").Visibility == Visibility.Visible); }
+            }
+            if (scenario == "server") { core.Snapshot.state.server_address = "https://other.example.com"; core.Emit(); Pump(); }
+            bool expected = scenario == "missing" || scenario == "old-token" || scenario == "not-capturing";
+            if (expected)
+            {
+                CheckImportantNotice(window, scenario == "not-capturing" ? "尚未开始抓取" : "退出账号后重新登录");
+                if (scenario == "missing")
+                {
+                    Capture(window, "wpf-login-reminder-100");
+                    Capture(window, "wpf-login-reminder-150", 1.5);
+                    ObserveFor(TimeSpan.FromMilliseconds(250));
+                    Check(Control<Grid>(window, "ImportantOverlay").Visibility == Visibility.Visible, "important notice disappeared without acknowledgement");
+                    PressKey(window, Key.Escape);
+                    window.Close(); Pump();
+                    Check(window.IsVisible && Control<Grid>(window, "ImportantOverlay").Visibility == Visibility.Visible, "important notice was skipped without confirmation");
+                    Check(core.Snapshot.state.capturing, "login reminder stopped background capture");
+                }
+                Acknowledge(window);
+                Check(Control<Grid>(window, "ImportantOverlay").Visibility == Visibility.Collapsed, "confirmed reminder stayed visible");
+            }
+            ObserveFor(TimeSpan.FromMilliseconds(220));
+            Check(Control<Grid>(window, "ImportantOverlay").Visibility == Visibility.Collapsed, "stale or repeated login reminder: " + scenario);
+            window.Close(); Until(() => !window.IsVisible);
+        }
+    }
+    private static void ImportantNoticeWorkflow()
+    {
+        foreach (Rect area in new[] { new Rect(0, 0, 1400, 1000), new Rect(0, 0, 720, 600), new Rect(0, 0, 380, 384) })
+        {
+            var core = new FakeCore();
+            var window = new MainWindow(core, workArea: () => area);
+            window.Show(); Until(() => core.Started);
+            var competingWindow = new Window { Title = "提示层级测试", Width = 300, Height = 200, ShowInTaskbar = false };
+            competingWindow.Show();
+            competingWindow.Activate();
+            core.Snapshot.error = "未找到微信启动入口。请先安装电脑版微信，打开并完成登录后再重试。";
+            core.Emit();
+            CheckImportantNotice(window, "安装电脑版微信");
+            Check(IsAbove(window, new WindowInteropHelper(competingWindow).Handle) && !IsTopmost(window), "important notice did not bring the helper forward normally");
+            competingWindow.Close();
+            core.Emit(); Pump();
+            core.Snapshot.error = "微信尚未打开。请先打开并登录电脑版微信。";
+            core.Emit(); Pump();
+            Check(Text(window, "ImportantBody").Contains("安装电脑版微信"), "queued notice replaced an unconfirmed message");
+            Capture(window, area.Width == 1400 ? "wpf-wechat-install-dialog-100" : area.Width == 720 ? "wpf-wechat-dialog-small-100" : "wpf-wechat-dialog-minimum-100");
+            Acknowledge(window);
+            CheckImportantNotice(window, "微信尚未打开");
+            PressKey(window, Key.Enter);
+            Check(Control<Grid>(window, "ImportantOverlay").Visibility == Visibility.Collapsed, "keyboard confirmation did not dismiss notice");
+            Check(Control<FrameworkElement>(window, "LoginView").IsEnabled, "confirmation did not restore form interaction");
+            core.Snapshot.error = null;
+            core.Snapshot.token = "rt_background_synthetic";
+            core.Snapshot.state.submission = "failed";
+            core.Emit();
+            CheckImportantNotice(window, "Token 已保留");
+            core.Emit(); Pump();
+            Acknowledge(window);
+            Check(Control<Grid>(window, "ImportantOverlay").Visibility == Visibility.Collapsed, "repeated snapshot duplicated the submission alert");
+            window.Close(); Until(() => !window.IsVisible);
+        }
     }
     private static bool IsTopmost(Window window) => (GetWindowLong(new WindowInteropHelper(window).Handle, -20) & 8) != 0;
     private static bool IsAbove(Window window, IntPtr other)
@@ -522,14 +692,17 @@ internal static class WpfTests
             core.Snapshot.state.server_address = "https://sign.example.com";
             core.Emit();
             Until(() => Control<Button>(window, "MiniProgramButton").IsEnabled);
+            core.Snapshot.state.capturing = true;
+            core.Emit(); Pump();
             WaitForRender();
             for (int run = 1; run <= 2; run++)
             {
                 window.Activate();
                 bool reopening = desktop.FindWindows().Count == 1;
                 Click(window, "MiniProgramButton");
-                Until(() => Control<Button>(window, "MiniProgramButton").IsEnabled);
-                Check(Text(window, "ToastText") == (reopening ? "领克小程序已重新打开，请在小程序内重新登录。" : "领克小程序已打开，请在小程序内重新登录。"), "actual WeChat launch failed: " + Text(window, "ToastText"));
+                Until(() => Control<Button>(window, "MiniProgramButton").IsEnabled || Control<Grid>(window, "ImportantOverlay").Visibility == Visibility.Visible);
+                Check(Control<Grid>(window, "ImportantOverlay").Visibility != Visibility.Visible, "actual WeChat launch failed: " + Text(window, "ImportantBody"));
+                Check(Text(window, "ToastText") == (reopening ? "领克小程序已重新打开，正在等待凭据。" : "领克小程序已打开，正在等待凭据。"), "actual WeChat launch failed: " + Text(window, "ToastText"));
                 Check(desktop.FindWindows().Count == 1, "actual WeChat did not show a single Lynk window");
                 Check(!window.Topmost && !IsTopmost(window), "actual launch left the helper permanently topmost");
                 var settling = Stopwatch.StartNew();
@@ -549,14 +722,15 @@ internal static class WpfTests
             competingWindow.Close();
             Console.WriteLine("真实微信打开、重开及助手窗口前台验证通过。");
         }
-        finally { window.Close(); Until(() => !window.IsVisible); }
+        finally { if (Control<Grid>(window, "ImportantOverlay").Visibility == Visibility.Visible) Acknowledge(window); window.Close(); Until(() => !window.IsVisible); }
     }
     private sealed class FakeMiniProgramDesktop : IMiniProgramDesktop
     {
-        public bool Available = true, RefuseClose, RefuseOpen;
+        public bool Available = true, Running = true, RefuseClose, RefuseOpen;
         public int Count;
         public List<string> Calls = new List<string>();
         public bool IsAvailable => Available;
+        public bool IsRunning => Running;
         public IReadOnlyList<IntPtr> FindWindows() => Enumerable.Range(1, Count).Select(value => new IntPtr(value)).ToArray();
         public void Close(IntPtr handle) { Calls.Add("close:" + handle); if (!RefuseClose) Count = 0; }
         public bool IsOpen(IntPtr handle) => Count > 0;
@@ -599,7 +773,7 @@ internal static class WpfTests
                     Snapshot.state.logged_in = true; Snapshot.state.username = "周末去看海"; Snapshot.state.server_address = "https://sign.example.com"; Snapshot.state.message = "服务器登录成功"; Snapshot.token = null; Snapshot.state.candidates = null; Snapshot.state.submission = null; Snapshot.state.confirmation_required = false;
                     break;
                 case "certificate/install": Snapshot.state.trusted = true; break;
-                case "start": Snapshot.state.capturing = true; Snapshot.state.message = "等待领克登录流量，请在电脑微信打开领克小程序并重新登录。"; break;
+                case "start": Snapshot.state.capturing = true; Snapshot.state.message = "等待领克登录流量，请点击工具里的“打开领克小程序”。未获取到凭据时，请登录或退出账号后重新登录。"; break;
                 case "stop": Snapshot.state.capturing = false; break;
                 case "submit":
                     Snapshot.state.selected_candidate = Snapshot.selected;

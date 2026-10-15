@@ -276,6 +276,22 @@
         </Border>
       </Grid>
     </ScrollViewer>
+    <Grid x:Name="ImportantOverlay" Visibility="Collapsed" Background="#B30D1016" Panel.ZIndex="20" KeyboardNavigation.TabNavigation="Cycle" KeyboardNavigation.ControlTabNavigation="Cycle" KeyboardNavigation.DirectionalNavigation="Contained">
+      <Border x:Name="ImportantCard" MaxWidth="440" Margin="24" Padding="26" VerticalAlignment="Center" Background="#2B3038" BorderBrush="#2AFFFFFF" BorderThickness="1" CornerRadius="16" AutomationProperties.Name="重要操作提示">
+        <StackPanel>
+          <Border x:Name="ImportantIconTile" Width="46" Height="46" CornerRadius="13" Background="#263D59" HorizontalAlignment="Left" Margin="0,0,0,18">
+            <Path x:Name="ImportantIcon" Data="{StaticResource Icon_key}" Fill="{StaticResource AccentBrush}" Width="25" Height="25" Stretch="Uniform" />
+          </Border>
+          <TextBlock x:Name="ImportantTitle" FontSize="22" FontWeight="SemiBold" Margin="0,0,0,12" />
+          <ScrollViewer x:Name="ImportantBodyHost" MaxHeight="220" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Focusable="False">
+            <TextBlock x:Name="ImportantBody" Foreground="{StaticResource MutedBrush}" FontSize="14" LineHeight="23" />
+          </ScrollViewer>
+          <Border BorderBrush="{StaticResource LineBrush}" BorderThickness="0,1,0,0" Margin="0,24,0,0" Padding="0,18,0,0">
+            <Button x:Name="ImportantConfirmButton" Content="确认" Width="104" Height="42" HorizontalAlignment="Right" Style="{StaticResource Primary}" Click="ImportantConfirmed" AutomationProperties.HelpText="确认已阅读提示后继续操作" />
+          </Border>
+        </StackPanel>
+      </Border>
+    </Grid>
     <Border x:Name="Toast" Background="#353D48" BorderBrush="#26FFFFFF" BorderThickness="1" CornerRadius="10" Padding="16,10" HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,22" Visibility="Collapsed" IsHitTestVisible="False">
       <TextBlock x:Name="ToastText" />
     </Border>

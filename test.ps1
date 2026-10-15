@@ -17,8 +17,14 @@ try {
     & $taskMSBuild wpf/tests/WpfTests.csproj /nologo /t:Build /v:minimal /m:1 /nr:false
     if ($LASTEXITCODE -ne 0) { throw 'WPF 测试程序构建失败。' }
     for ($taskRun = 1; $taskRun -le 3; $taskRun++) {
-        & ./test-results/wpf/WpfTests.exe (Join-Path $PSScriptRoot 'test-results/wpf-native') $taskExpectedServer
-        if ($LASTEXITCODE -ne 0) { throw "WPF 第 $taskRun 次交互验证失败。" }
+        $taskArguments = '"' + (Join-Path $PSScriptRoot 'test-results/wpf-native') + '" "' + $taskExpectedServer + '"'
+        $taskOutput = Join-Path $PSScriptRoot ".cache/wpf-native-$taskRun.out"
+        $taskError = Join-Path $PSScriptRoot ".cache/wpf-native-$taskRun.err"
+        # Match a normal desktop launch instead of inheriting terminal startup window flags.
+        $taskProcess = Start-Process -FilePath (Join-Path $PSScriptRoot 'test-results/wpf/WpfTests.exe') -ArgumentList $taskArguments -WindowStyle Normal -Wait -PassThru -RedirectStandardOutput $taskOutput -RedirectStandardError $taskError
+        Get-Content -LiteralPath $taskOutput -Encoding utf8
+        Get-Content -LiteralPath $taskError -Encoding utf8
+        if ($taskProcess.ExitCode -ne 0) { throw "WPF 第 $taskRun 次交互验证失败。" }
         Write-Host "WPF 第 $taskRun 次交互验证通过。"
     }
 } finally {

@@ -18,6 +18,7 @@ namespace LynkSignTokenHelper
     public interface IMiniProgramDesktop
     {
         bool IsAvailable { get; }
+        bool IsRunning { get; }
         IReadOnlyList<IntPtr> FindWindows();
         void Close(IntPtr handle);
         bool IsOpen(IntPtr handle);
@@ -39,7 +40,8 @@ namespace LynkSignTokenHelper
         public async Task<bool> OpenAsync(CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (!desktop.IsAvailable) throw new InvalidOperationException("未找到微信启动入口，请先安装并登录电脑版微信。");
+            if (!desktop.IsAvailable) throw new InvalidOperationException("未找到微信启动入口。\n\n请先安装电脑版微信，打开并完成微信登录后再重试。");
+            if (!desktop.IsRunning) throw new InvalidOperationException("微信尚未打开。\n\n请先打开同一台电脑上的微信并完成登录，再点击“打开领克小程序”。");
             IReadOnlyList<IntPtr> windows = desktop.FindWindows();
             if (windows.Count > 1) throw new InvalidOperationException("检测到多个领克窗口，请先保留一个后重试。");
             bool reopened = windows.Count == 1;
@@ -59,9 +61,11 @@ namespace LynkSignTokenHelper
             var opening = Stopwatch.StartNew();
             while (desktop.FindWindows().Count == 0)
             {
-                if (opening.Elapsed >= timeout) throw new InvalidOperationException("已发送打开请求，请确认微信已登录后重试。");
+                if (opening.Elapsed >= timeout) throw new InvalidOperationException("未能打开领克小程序。\n\n请确认电脑版微信已经打开并完成登录；如果微信停留在扫码或登录页面，请先登录微信后重试。");
                 await Task.Delay(100, cancellationToken);
             }
+            // WeChat activates the new window after it becomes visible.
+            await Task.Delay(750, cancellationToken);
             return reopened;
         }
     }
@@ -78,6 +82,18 @@ namespace LynkSignTokenHelper
                         return !string.IsNullOrWhiteSpace(key?.GetValue("") as string);
                 }
                 catch (System.Security.SecurityException) { return false; }
+            }
+        }
+
+        public bool IsRunning
+        {
+            get
+            {
+                bool running = false;
+                foreach (string name in new[] { "Weixin", "WeChat" })
+                    foreach (Process process in Process.GetProcessesByName(name))
+                        using (process) running = true;
+                return running;
             }
         }
 

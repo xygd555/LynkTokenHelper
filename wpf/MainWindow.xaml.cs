@@ -30,9 +30,21 @@ namespace LynkSignTokenHelper
         private string lastAction;
         private string candidateSignature = "";
         private readonly DispatcherTimer toastTimer;
+        private readonly DispatcherTimer miniProgramCaptureTimer;
+        private string miniProgramCaptureAt, miniProgramCaptureServer;
+        private int miniProgramCaptureGeneration;
+        private readonly Queue<ImportantNotice> importantNotices = new Queue<ImportantNotice>();
+        private ImportantNotice currentImportantNotice;
+        private IInputElement previousNoticeFocus;
+        private sealed class ImportantNotice
+        {
+            public string Title, Message;
+            public bool Warning;
+            public Action Confirmed;
+        }
         public Action<string> CopyText { get; set; } = Clipboard.SetText;
 
-        public MainWindow(ICoreClient client, bool restoreOnly = false, Func<Rect> workArea = null, IMiniProgramLauncher miniProgramLauncher = null)
+        public MainWindow(ICoreClient client, bool restoreOnly = false, Func<Rect> workArea = null, IMiniProgramLauncher miniProgramLauncher = null, TimeSpan? miniProgramCaptureDelay = null)
         {
             this.client = client;
             this.restoreOnly = restoreOnly;
@@ -43,6 +55,12 @@ namespace LynkSignTokenHelper
             Address.Text = BuildInfo.DefaultServer;
             toastTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2.1) };
             toastTimer.Tick += (sender, args) => { toastTimer.Stop(); Toast.Visibility = Visibility.Collapsed; };
+            miniProgramCaptureTimer = new DispatcherTimer { Interval = miniProgramCaptureDelay ?? TimeSpan.FromSeconds(10) };
+            miniProgramCaptureTimer.Tick += (sender, args) =>
+            {
+                miniProgramCaptureTimer.Stop();
+                if (ShouldPromptForMiniProgramLogin()) ShowImportantNotice("请登录领克账号", "小程序已打开，暂未获取到新的凭据。\n\n如果小程序尚未登录，请登录领克账号；如果已经登录，请退出账号后重新登录。\n\n工具会继续抓取，获取凭据后自动提交。", false);
+            };
             client.Updated += value => Dispatcher.BeginInvoke(new Action(() =>
             {
                 ready = alive = true;
@@ -53,24 +71,33 @@ namespace LynkSignTokenHelper
                     lastAction = "";
                 }
                 if (closeRequested && !value.closing && !string.IsNullOrEmpty(value.error)) closeRequested = false;
+                bool newError = !string.IsNullOrEmpty(value.error) && (value.error != snapshot?.error || value.request_id != snapshot?.request_id);
+                bool submissionFailed = value.state.submission == "failed" && snapshot?.state.submission != "failed";
+                bool captureWarning = value.state.message != snapshot?.state.message && (value.state.message?.StartsWith("等待已超时") == true || value.state.message?.StartsWith("领克连接失败") == true);
                 snapshot = value;
+                if (!ShouldPromptForMiniProgramLogin()) miniProgramCaptureTimer.Stop();
                 Render();
+                if (newError) ShowImportantNotice("操作未完成", value.error);
+                else if (submissionFailed) ShowImportantNotice("提交失败，Token 已保留", "本次获取的 Token 已保留，可以在主界面复制备用，也可以检查服务器状态后重试提交。\n\n详细原因见主界面的状态提示。");
+                else if (captureWarning) ShowImportantNotice("抓取需要处理", value.state.message);
             }));
             client.Faulted += message => Dispatcher.BeginInvoke(new Action(() =>
             {
                 alive = false;
+                CancelMiniProgramReminder();
                 closeRequested = false;
                 pendingId = 0;
                 if (snapshot != null) { snapshot.error = message; snapshot.pending = snapshot.closing = false; snapshot.state.busy = false; Render(); }
                 else { LoginNotice.Text = message; LoginNotice.Visibility = Visibility.Visible; LoginButtonText.Text = "无法连接"; }
+                ShowImportantNotice("工具连接已断开", message + "\n请重新打开工具，检查代理是否已恢复。");
             }));
             client.Closed += () => Dispatcher.BeginInvoke(new Action(() =>
             {
                 allowClose = true;
-                if (restoreOnly) MessageBox.Show(this, "原代理配置已恢复。", Title, MessageBoxButton.OK, MessageBoxImage.Information);
-                Close();
+                if (restoreOnly) ShowImportantNotice("代理已恢复", "原代理配置已恢复，可以关闭工具。", false, Close);
+                else Close();
             }));
-            Closed += (sender, args) => { miniProgramOperation?.Cancel(); toastTimer.Stop(); client.Dispose(); };
+            Closed += (sender, args) => { miniProgramOperation?.Cancel(); CancelMiniProgramReminder(); toastTimer.Stop(); client.Dispose(); };
             ApplyWindowSize(true);
         }
 
@@ -99,6 +126,7 @@ namespace LynkSignTokenHelper
             Grid.SetColumn(ResultPanel, narrow ? 0 : 2);
             Grid.SetRow(ResultPanel, narrow ? 1 : 0);
             ResultPanel.Margin = new Thickness(0, narrow ? 24 : 2, 0, 0);
+            ImportantBodyHost.MaxHeight = Math.Max(24, Math.Min(220, Height - 384));
             LoginCardHost.Width = Math.Min(388, Math.Max(280, Width - 64));
             bool compactLogin = Height < 650;
             LoginCardHost.Padding = compactLogin ? new Thickness(18, 12, 18, 12) : new Thickness(24, 22, 24, 22);
@@ -176,7 +204,7 @@ namespace LynkSignTokenHelper
                 CertificateStatus.ToolTip = state.trusted ? "证书已安装到当前 Windows 用户的受信任根证书存储区" : "安装抓包证书后即可开始抓取";
                 InstallButton.Visibility = Show(!state.trusted);
                 InstallButton.IsEnabled = alive && !busy && !state.capturing;
-                CaptureGuide.Text = !state.trusted ? "安装证书后开始抓取，再在电脑微信登录领克小程序。" : state.capturing ? "请在电脑微信重新登录领克小程序；没有流量时，先关闭小程序再打开。" : captured ? "Token 已保留在右侧，可复制备用；重新抓取可更新凭据。" : "开始抓取后，在电脑微信的领克小程序重新登录。";
+                CaptureGuide.Text = !state.trusted ? "安装证书并登录电脑微信，再开始抓取并点击打开小程序。" : state.capturing ? "点击打开小程序；未获取到凭据时，登录或退出账号后重新登录。" : captured ? "Token 已保留在右侧，可复制备用；重新抓取可更新凭据。" : "先登录电脑微信，开始抓取后点击打开领克小程序。";
                 ResultHint.Visibility = Show(!captured || state.capturing);
                 ResultHint.Text = state.capturing ? "抓到凭据后会自动提交" : "获取后自动提交到服务器";
                 string signature = string.Join("\n", values.Select(value => value.id + "|" + value.device_id + "|" + value.source));
@@ -218,7 +246,7 @@ namespace LynkSignTokenHelper
         private void RenderNotice(AppState state, bool captured, bool saved, bool busy, int count)
         {
             string title = state.trusted ? "可以开始抓取" : "先安装抓包证书";
-            string body = state.trusted ? "点击左侧开始抓取，再在电脑微信重新登录领克小程序。" : "点击左侧证书旁的“安装”，完成后即可开始抓取。";
+            string body = state.trusted ? "先打开并登录电脑微信，再点击左侧开始抓取和打开领克小程序。" : "点击左侧证书旁的“安装”，完成后即可开始抓取。";
             string kind = "", icon = state.trusted ? "key" : "shield_checkmark";
             if (captured) { title = "凭据已获取"; body = count > 1 ? "选择对应的凭据后提交。" : state.message; icon = "checkmark_circle"; }
             if (state.capturing) { title = "正在等待新的登录凭据"; body = state.message; icon = "arrow_sync"; }
@@ -244,12 +272,68 @@ namespace LynkSignTokenHelper
         }
         private void Send(string action, object input = null)
         {
-            if (!alive || Busy) return;
+            if (!alive || Busy || ImportantOverlay.Visibility == Visibility.Visible) return;
+            if (action == "start" || action == "stop" || action == "restore" || action == "login") CancelMiniProgramReminder();
             try { lastAction = action; pendingId = client.Command(action, input); Render(); }
             catch (Exception) { ShowToast("窗口连接已断开，请重新打开工具。", false); }
         }
+        private void CancelMiniProgramReminder()
+        {
+            miniProgramCaptureTimer.Stop();
+            miniProgramCaptureGeneration++;
+        }
+        private bool ShouldPromptForMiniProgramLogin() =>
+            alive && !closeRequested && IsVisible && snapshot?.state.logged_in == true && snapshot.state.capturing &&
+            snapshot.state.server_address == miniProgramCaptureServer && snapshot.state.captured_at == miniProgramCaptureAt;
+        private void ShowImportantNotice(string title, string message, bool warning = true, Action confirmed = null)
+        {
+            if (!IsVisible || closeRequested || currentImportantNotice?.Message == message || importantNotices.Any(notice => notice.Message == message)) return;
+            importantNotices.Enqueue(new ImportantNotice { Title = title, Message = message, Warning = warning, Confirmed = confirmed });
+            if (currentImportantNotice == null)
+            {
+                previousNoticeFocus = Keyboard.FocusedElement;
+                ShowNextImportantNotice();
+            }
+        }
+        private void ShowNextImportantNotice()
+        {
+            if (importantNotices.Count == 0)
+            {
+                ImportantOverlay.Visibility = Visibility.Collapsed;
+                LoginView.IsEnabled = MainView.IsEnabled = true;
+                if (previousNoticeFocus is UIElement element && element.IsVisible && element.IsEnabled) Keyboard.Focus(previousNoticeFocus);
+                previousNoticeFocus = null;
+                return;
+            }
+            currentImportantNotice = importantNotices.Dequeue();
+            ImportantTitle.Text = currentImportantNotice.Title;
+            ImportantBody.Text = currentImportantNotice.Message;
+            ImportantIcon.Data = (Geometry)FindResource(currentImportantNotice.Warning ? "Icon_dismiss_circle" : "Icon_key");
+            ImportantIcon.Fill = Brush(currentImportantNotice.Warning ? "#EDAFB8" : "#85BAFF");
+            ImportantIconTile.Background = Brush(currentImportantNotice.Warning ? "#45323D" : "#263D59");
+            ImportantBodyHost.ScrollToTop();
+            LoginView.IsEnabled = MainView.IsEnabled = false;
+            Toast.Visibility = Visibility.Collapsed;
+            ImportantOverlay.Visibility = Visibility.Visible;
+            if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
+            IntPtr handle = new WindowInteropHelper(this).Handle;
+            bool previousTopmost = (GetWindowLong(handle, -20) & 8) != 0;
+            SetTopmost(handle, true);
+            Activate();
+            SetTopmost(handle, previousTopmost);
+            ImportantConfirmButton.Focus();
+        }
+        private void ImportantConfirmed(object sender, RoutedEventArgs args)
+        {
+            if (currentImportantNotice == null) return;
+            Action confirmed = currentImportantNotice.Confirmed;
+            currentImportantNotice = null;
+            ShowNextImportantNotice();
+            confirmed?.Invoke();
+        }
         private void ShowToast(string message, bool success = true)
         {
+            if (!success) { ShowImportantNotice("操作未完成", message); return; }
             ToastText.Text = message;
             ToastText.Foreground = Brush(success ? "#BCE6CC" : "#F0C2C8");
             Toast.Visibility = Visibility.Visible;
@@ -290,6 +374,8 @@ namespace LynkSignTokenHelper
         }
         private void SwitchClicked(object sender, RoutedEventArgs args)
         {
+            CancelMiniProgramReminder();
+            miniProgramOperation?.Cancel();
             showPassword = false;
             Password.Visibility = Visibility.Visible;
             VisiblePassword.Visibility = Visibility.Collapsed;
@@ -309,7 +395,13 @@ namespace LynkSignTokenHelper
         private async void MiniProgramClicked(object sender, RoutedEventArgs args)
         {
             if (!MiniProgramButton.IsEnabled || openingMiniProgram) return;
+            CancelMiniProgramReminder();
+            int captureGeneration = miniProgramCaptureGeneration;
+            miniProgramCaptureAt = snapshot?.state.captured_at;
+            miniProgramCaptureServer = snapshot?.state.server_address;
             openingMiniProgram = true;
+            bool? reopened = null;
+            string failure = null;
             IntPtr handle = new WindowInteropHelper(this).Handle;
             bool previousTopmost = (GetWindowLong(handle, -20) & 8) != 0;
             using (var operation = new CancellationTokenSource())
@@ -320,17 +412,16 @@ namespace LynkSignTokenHelper
                 {
                     if (!SetTopmost(handle, true)) throw new InvalidOperationException("无法调整窗口层级，请重新打开工具后重试。");
                     Activate();
-                    bool reopened = await miniProgramLauncher.OpenAsync(operation.Token);
-                    if (!closeRequested && IsVisible) ShowToast(reopened ? "领克小程序已重新打开，请在小程序内重新登录。" : "领克小程序已打开，请在小程序内重新登录。");
+                    reopened = await miniProgramLauncher.OpenAsync(operation.Token);
                 }
                 catch (OperationCanceledException) { }
                 catch (InvalidOperationException error)
                 {
-                    if (!closeRequested && IsVisible) ShowToast(error.Message, false);
+                    failure = error.Message;
                 }
                 catch (Exception)
                 {
-                    if (!closeRequested && IsVisible) ShowToast("打开失败，请确认微信已登录后重试。", false);
+                    failure = "打开失败，请确认电脑版微信已安装、打开并完成登录后重试。";
                 }
                 finally
                 {
@@ -340,6 +431,16 @@ namespace LynkSignTokenHelper
                     openingMiniProgram = false;
                     if (IsVisible) Render();
                 }
+            }
+            if (closeRequested || !IsVisible) return;
+            if (failure != null) ShowImportantNotice("无法打开领克小程序", failure);
+            else if (reopened.HasValue)
+            {
+                ShowToast(reopened.Value ? "领克小程序已重新打开，正在等待凭据。" : "领克小程序已打开，正在等待凭据。");
+                if (captureGeneration != miniProgramCaptureGeneration) return;
+                if (ShouldPromptForMiniProgramLogin()) miniProgramCaptureTimer.Start();
+                else if (snapshot?.state.capturing == false && snapshot.state.captured_at == miniProgramCaptureAt)
+                    ShowImportantNotice("请先开始抓取", "小程序已打开，但工具尚未开始抓取。\n\n请先安装抓包证书并点击“开始抓取”，再点击“打开领克小程序”。", false);
             }
         }
         private void StartClicked(object sender, RoutedEventArgs args) => Send("start");
@@ -351,10 +452,12 @@ namespace LynkSignTokenHelper
         private void ExitClicked(object sender, RoutedEventArgs args) => Close();
         private void WindowClosing(object sender, CancelEventArgs args)
         {
+            if (!allowClose && ImportantOverlay.Visibility == Visibility.Visible) { args.Cancel = true; ImportantConfirmButton.Focus(); return; }
             if (allowClose || !ready || !alive) return;
             args.Cancel = true;
             if (closeRequested) return;
             closeRequested = true;
+            CancelMiniProgramReminder();
             miniProgramOperation?.Cancel();
             Render();
             try { client.Close(); }
@@ -362,6 +465,12 @@ namespace LynkSignTokenHelper
         }
         private void WindowKeyDown(object sender, KeyEventArgs args)
         {
+            if (ImportantOverlay.Visibility == Visibility.Visible)
+            {
+                if (args.Key == Key.Enter) { args.Handled = true; ImportantConfirmed(sender, args); }
+                else if (args.Key == Key.Escape) args.Handled = true;
+                return;
+            }
             if (args.Key == Key.Enter && LoginView.Visibility == Visibility.Visible && LoginButton.IsEnabled) { LoginClicked(sender, args); args.Handled = true; }
             if (args.Key != Key.Escape) return;
             args.Handled = true;
