@@ -4,6 +4,7 @@ using System.ComponentModel;
 using System.Globalization;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Threading;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -20,6 +21,9 @@ namespace LynkSignTokenHelper
         private readonly ICoreClient client;
         private readonly bool restoreOnly;
         private readonly Func<Rect> workArea;
+        private readonly IMiniProgramLauncher miniProgramLauncher;
+        private CancellationTokenSource miniProgramOperation;
+        private bool openingMiniProgram;
         private CoreSnapshot snapshot;
         private bool ready, alive, editLogin, showPassword, rendering, allowClose, closeRequested, started;
         private long pendingId;
@@ -28,10 +32,11 @@ namespace LynkSignTokenHelper
         private readonly DispatcherTimer toastTimer;
         public Action<string> CopyText { get; set; } = Clipboard.SetText;
 
-        public MainWindow(ICoreClient client, bool restoreOnly = false, Func<Rect> workArea = null)
+        public MainWindow(ICoreClient client, bool restoreOnly = false, Func<Rect> workArea = null, IMiniProgramLauncher miniProgramLauncher = null)
         {
             this.client = client;
             this.restoreOnly = restoreOnly;
+            this.miniProgramLauncher = miniProgramLauncher ?? new LynkMiniProgramLauncher();
             this.workArea = workArea ?? (() => SystemParameters.WorkArea);
             InitializeComponent();
             Icon = BitmapFrame.Create(new Uri("pack://application:,,,/LynkSignTokenHelper-windows-x64;component/Branding/lynk-icon.ico"));
@@ -65,7 +70,7 @@ namespace LynkSignTokenHelper
                 if (restoreOnly) MessageBox.Show(this, "原代理配置已恢复。", Title, MessageBoxButton.OK, MessageBoxImage.Information);
                 Close();
             }));
-            Closed += (sender, args) => { toastTimer.Stop(); client.Dispose(); };
+            Closed += (sender, args) => { miniProgramOperation?.Cancel(); toastTimer.Stop(); client.Dispose(); };
             ApplyWindowSize(true);
         }
 
@@ -165,6 +170,8 @@ namespace LynkSignTokenHelper
                 StartButton.Style = (Style)FindResource(captured ? typeof(Button) : (object)"Primary");
                 StartButton.IsEnabled = alive && !busy && state.trusted && !state.confirmation_required;
                 StopButton.IsEnabled = alive && !busy;
+                MiniProgramButton.IsEnabled = alive && !busy && !openingMiniProgram;
+                MiniProgramButtonText.Text = openingMiniProgram ? "正在打开…" : "打开领克小程序";
                 CertificateStatus.Text = state.trusted ? "已安装 · 当前用户" : "尚未安装";
                 CertificateStatus.ToolTip = state.trusted ? "证书已安装到当前 Windows 用户的受信任根证书存储区" : "安装抓包证书后即可开始抓取";
                 InstallButton.Visibility = Show(!state.trusted);
@@ -299,6 +306,36 @@ namespace LynkSignTokenHelper
         private void CopyDeviceClicked(object sender, RoutedEventArgs args) => Copy(snapshot?.device_id, "设备 ID ");
         private void InstallClicked(object sender, RoutedEventArgs args) => Send("certificate/install");
         private void RemoveClicked(object sender, RoutedEventArgs args) => Send("certificate/remove");
+        private async void MiniProgramClicked(object sender, RoutedEventArgs args)
+        {
+            if (!MiniProgramButton.IsEnabled || openingMiniProgram) return;
+            openingMiniProgram = true;
+            using (var operation = new CancellationTokenSource())
+            {
+                miniProgramOperation = operation;
+                Render();
+                try
+                {
+                    bool reopened = await miniProgramLauncher.OpenAsync(operation.Token);
+                    if (!closeRequested && IsVisible) ShowToast(reopened ? "领克小程序已重新打开，请在小程序内重新登录。" : "领克小程序已打开，请在小程序内重新登录。");
+                }
+                catch (OperationCanceledException) { }
+                catch (InvalidOperationException error)
+                {
+                    if (!closeRequested && IsVisible) ShowToast(error.Message, false);
+                }
+                catch (Exception)
+                {
+                    if (!closeRequested && IsVisible) ShowToast("打开失败，请确认微信已登录后重试。", false);
+                }
+                finally
+                {
+                    miniProgramOperation = null;
+                    openingMiniProgram = false;
+                    if (IsVisible) Render();
+                }
+            }
+        }
         private void StartClicked(object sender, RoutedEventArgs args) => Send("start");
         private void StopClicked(object sender, RoutedEventArgs args) => Send("stop");
         private void RestoreClicked(object sender, RoutedEventArgs args) => Send("restore");
@@ -312,6 +349,7 @@ namespace LynkSignTokenHelper
             args.Cancel = true;
             if (closeRequested) return;
             closeRequested = true;
+            miniProgramOperation?.Cancel();
             Render();
             try { client.Close(); }
             catch (Exception) { closeRequested = false; alive = false; ShowToast("连接已断开，请重新打开工具检查代理恢复。", false); Render(); }

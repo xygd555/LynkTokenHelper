@@ -95,11 +95,11 @@
             <Grid>
               <Grid.RowDefinitions>
                 <RowDefinition Height="24" />
-                <RowDefinition Height="140" />
-                <RowDefinition Height="62" />
-                <RowDefinition Height="60" />
-                <RowDefinition Height="84" />
-                <RowDefinition Height="78" />
+                <RowDefinition Height="120" />
+                <RowDefinition Height="56" />
+                <RowDefinition Height="104" />
+                <RowDefinition Height="72" />
+                <RowDefinition Height="72" />
               </Grid.RowDefinitions>
               <Grid Grid.Row="0">
                 <TextBlock Text="抓包状态" Foreground="#C3CBD7" />
@@ -132,7 +132,12 @@
                   <TextBlock Text="领克请求" Style="{StaticResource Muted}" HorizontalAlignment="Center" />
                 </StackPanel>
               </Grid>
-              <Grid Grid.Row="3" Margin="0,10">
+              <Grid Grid.Row="3" Margin="0,8">
+                <Grid.RowDefinitions>
+                  <RowDefinition Height="40" />
+                  <RowDefinition Height="8" />
+                  <RowDefinition Height="40" />
+                </Grid.RowDefinitions>
                 <Button x:Name="StartButton" Style="{StaticResource Primary}" Click="StartClicked" IsEnabled="False">
                   <StackPanel Orientation="Horizontal">
                     <Path Data="{StaticResource Icon_arrow_sync}" Style="{StaticResource Icon}" Margin="0,0,8,0" />
@@ -140,6 +145,12 @@
                   </StackPanel>
                 </Button>
                 <Button x:Name="StopButton" Content="停止抓取" Click="StopClicked" Visibility="Hidden" />
+                <Button x:Name="MiniProgramButton" Grid.Row="2" Click="MiniProgramClicked" IsEnabled="False" ToolTip="已打开时会先关闭领克窗口，再重新打开；请先登录电脑版微信">
+                  <StackPanel Orientation="Horizontal">
+                    <Path Data="{StaticResource Icon_arrow_right}" Style="{StaticResource Icon}" Margin="0,0,8,0" />
+                    <TextBlock x:Name="MiniProgramButtonText" Text="打开领克小程序" FontSize="13" Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
+                  </StackPanel>
+                </Button>
               </Grid>
               <Border Grid.Row="4" BorderBrush="{StaticResource LineBrush}" BorderThickness="0,1,0,0" Margin="0,12,0,0" Padding="0,16,0,0">
                 <Grid VerticalAlignment="Top">
