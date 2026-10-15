@@ -26,7 +26,8 @@
             <Image Source="{StaticResource AppLogo}" Width="40" Height="40" HorizontalAlignment="Left" AutomationProperties.Name="lynk 项目图标" />
             <TextBlock Grid.Column="1" Text="连接服务器" FontSize="24" FontWeight="SemiBold" VerticalAlignment="Center" />
             <Button x:Name="BackButton" Grid.Column="2" Content="返回" Style="{StaticResource Subtle}" Padding="8,0" Click="BackClicked" Visibility="Hidden" ToolTip="返回工作台" AutomationProperties.Name="返回工作台" />
-            <TextBlock x:Name="LoginSubtitle" Grid.Row="1" Grid.ColumnSpan="3" Text="通过网页授权连接面板" Style="{StaticResource Muted}" Margin="0,8,0,0" />
+            <TextBlock x:Name="LoginSubtitle" Grid.Row="1" Grid.ColumnSpan="2" Text="通过网页授权连接面板" Style="{StaticResource Muted}" Margin="0,8,0,0" />
+            <Button x:Name="LoginUpdateButton" Grid.Row="1" Grid.Column="2" Content="检查更新" Style="{StaticResource Subtle}" FontSize="12" MinHeight="28" Height="28" Padding="8,0" Margin="8,4,0,0" Click="CheckUpdatesClicked" AutomationProperties.Name="检查软件更新" />
           </Grid>
           <TextBlock x:Name="AddressLabel" Text="服务器地址" Margin="0,0,0,6" />
           <TextBox x:Name="Address" AutomationProperties.Name="服务器地址" Height="42" TextChanged="LoginInputChanged" ToolTip="完整的 HTTP 或 HTTPS 面板地址，可包含端口和子路径" />
@@ -284,6 +285,7 @@
               <TextBlock x:Name="ProxyState" Text="代理已恢复" Style="{StaticResource Muted}" />
             </StackPanel>
             <StackPanel Grid.Column="1" Orientation="Horizontal">
+              <Button x:Name="MainUpdateButton" Content="检查更新" Style="{StaticResource Subtle}" Click="CheckUpdatesClicked" Margin="0,0,12,0" AutomationProperties.Name="检查软件更新" />
               <Button x:Name="RestoreButton" Content="恢复代理" Style="{StaticResource Subtle}" Click="RestoreClicked" />
               <Button x:Name="RemoveButton" Content="移除证书" Style="{StaticResource Subtle}" Click="RemoveClicked" IsEnabled="False" />
               <Button x:Name="ExitButton" Content="退出" Style="{StaticResource Subtle}" Click="ExitClicked" />

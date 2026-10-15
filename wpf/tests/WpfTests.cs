@@ -19,7 +19,7 @@ using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using LynkSignTokenHelper;
 
-internal static class WpfTests
+internal static partial class WpfTests
 {
     private static string output;
     private static string expectedDefaultServer;
@@ -36,7 +36,14 @@ internal static class WpfTests
         {
             try
             {
-                if (args.Length > 1 && args[0] == "--authorization-live")
+                if (args.Length > 0 && args[0] == "--updates")
+                {
+                    output = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "wpf-native"));
+                    Directory.CreateDirectory(output);
+                    UpdateServiceTests(); UpdateWorkflowTests(); ActualUpdateWorker();
+                    Console.WriteLine("更新服务、文件替换与原生更新界面验证通过。");
+                }
+                else if (args.Length > 1 && args[0] == "--authorization-live")
                 {
                     output = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "wpf-native"));
                     Directory.CreateDirectory(output);
@@ -51,6 +58,8 @@ internal static class WpfTests
                     for (int pass = 1; pass <= (interactive ? 3 : 1); pass++)
                     {
                         BrowserLoginWorkflow();
+                        if (!browserOnly)
+                        { UpdateServiceTests(); UpdateWorkflowTests(); ActualUpdateWorker(); }
                         if (!browserOnly)
                         {
                         MiniProgramWorkflow();

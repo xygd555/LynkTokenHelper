@@ -46,10 +46,11 @@ namespace LynkSignTokenHelper
         public Action<string> CopyText { get; set; } = Clipboard.SetText;
         public Action<string> OpenBrowser { get; set; } = address => Process.Start(new ProcessStartInfo(address) { UseShellExecute = true });
 
-        public MainWindow(ICoreClient client, bool restoreOnly = false, Func<Rect> workArea = null, IMiniProgramLauncher miniProgramLauncher = null, TimeSpan? miniProgramCaptureDelay = null)
+        public MainWindow(ICoreClient client, bool restoreOnly = false, Func<Rect> workArea = null, IMiniProgramLauncher miniProgramLauncher = null, TimeSpan? miniProgramCaptureDelay = null, IToolUpdater updater = null)
         {
             this.client = client;
             this.restoreOnly = restoreOnly;
+            this.updater = updater;
             this.miniProgramLauncher = miniProgramLauncher ?? new LynkMiniProgramLauncher();
             this.workArea = workArea ?? (() => SystemParameters.WorkArea);
             InitializeComponent();
@@ -73,7 +74,7 @@ namespace LynkSignTokenHelper
                     pendingId = 0;
                     lastAction = "";
                 }
-                if (closeRequested && !value.closing && !string.IsNullOrEmpty(value.error)) closeRequested = false;
+                if (closeRequested && !value.closing && !string.IsNullOrEmpty(value.error)) { closeRequested = false; DiscardPendingUpdate(); }
                 bool openAuthorization = !string.IsNullOrEmpty(value.state.authorization_url) && value.state.authorization_url != snapshot?.state.authorization_url;
                 bool newError = !string.IsNullOrEmpty(value.error) && (value.error != snapshot?.error || value.request_id != snapshot?.request_id);
                 bool submissionFailed = value.state.submission == "failed" && snapshot?.state.submission != "failed";
@@ -90,6 +91,7 @@ namespace LynkSignTokenHelper
             client.Faulted += message => Dispatcher.BeginInvoke(new Action(() =>
             {
                 alive = false;
+                DiscardPendingUpdate();
                 CancelMiniProgramReminder();
                 closeRequested = false;
                 pendingId = 0;
@@ -99,12 +101,27 @@ namespace LynkSignTokenHelper
             }));
             client.Closed += () => Dispatcher.BeginInvoke(new Action(() =>
             {
+                if (pendingInstall != null)
+                {
+                    PreparedUpdate install = pendingInstall;
+                    pendingInstall = null;
+                    try { updater.Launch(install); }
+                    catch (Exception)
+                    {
+                        updater.Discard(install);
+                        alive = closeRequested = false; Render();
+                        ShowImportantNotice("无法启动更新程序", "代理已恢复，当前程序文件未修改。请关闭工具后重新打开，再尝试更新。");
+                        return;
+                    }
+                }
                 allowClose = true;
                 if (restoreOnly) ShowImportantNotice("代理已恢复", "原代理配置已恢复，可以关闭工具。", false, Close);
                 else Close();
             }));
-            Closed += (sender, args) => { miniProgramOperation?.Cancel(); CancelMiniProgramReminder(); toastTimer.Stop(); client.Dispose(); };
+            Closed += (sender, args) => { updateLifetime.Cancel(); updateDialog?.Close(); miniProgramOperation?.Cancel(); CancelMiniProgramReminder(); toastTimer.Stop(); client.Dispose(); };
             ApplyWindowSize(true);
+            RenderUpdateButtons();
+            Activated += (sender, args) => ScheduleUpdatePrompt();
         }
 
         private static Visibility Show(bool value) => value ? Visibility.Visible : Visibility.Collapsed;
@@ -117,6 +134,7 @@ namespace LynkSignTokenHelper
             Fade(LoginView);
             client.Start();
             Address.Focus();
+            if (updater != null && !restoreOnly) _ = CheckForUpdatesAsync(false);
         }
         private void ApplyWindowSize(bool login)
         {
@@ -261,7 +279,7 @@ namespace LynkSignTokenHelper
                 RemoveButton.IsEnabled = alive && !busy && state.trusted;
                 ExitButton.IsEnabled = !closeRequested;
             }
-            finally { rendering = false; }
+            finally { rendering = false; RenderUpdateButtons(); ScheduleUpdatePrompt(); }
         }
         private void RenderNotice(AppState state, bool captured, bool saved, bool busy, int count)
         {
@@ -324,6 +342,7 @@ namespace LynkSignTokenHelper
                 LoginView.IsEnabled = MainView.IsEnabled = true;
                 if (previousNoticeFocus is UIElement element && element.IsVisible && element.IsEnabled) Keyboard.Focus(previousNoticeFocus);
                 previousNoticeFocus = null;
+                ScheduleUpdatePrompt();
                 return;
             }
             currentImportantNotice = importantNotices.Dequeue();
@@ -520,7 +539,7 @@ namespace LynkSignTokenHelper
             miniProgramOperation?.Cancel();
             Render();
             try { client.Close(); }
-            catch (Exception) { closeRequested = false; alive = false; ShowToast("连接已断开，请重新打开工具检查代理恢复。", false); Render(); }
+            catch (Exception) { DiscardPendingUpdate(); closeRequested = false; alive = false; ShowToast("连接已断开，请重新打开工具检查代理恢复。", false); Render(); }
         }
         private void WindowKeyDown(object sender, KeyEventArgs args)
         {

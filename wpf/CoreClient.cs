@@ -118,7 +118,7 @@ namespace LynkSignTokenHelper
             finally { if (File.Exists(temporary)) File.Delete(temporary); }
             return executable;
         }
-        private static string Quote(string value)
+        internal static string Quote(string value)
         {
             // Windows command-line quoting, including trailing backslashes.
             var result = new StringBuilder("\"");
