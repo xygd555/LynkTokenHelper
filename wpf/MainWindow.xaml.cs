@@ -24,7 +24,7 @@ namespace LynkSignTokenHelper
         private readonly Func<Rect> workArea;
         private readonly IMiniProgramLauncher miniProgramLauncher;
         private CancellationTokenSource miniProgramOperation;
-        private bool openingMiniProgram, passwordLogin;
+        private bool openingMiniProgram;
         private CoreSnapshot snapshot;
         private bool ready, alive, editLogin, showPassword, rendering, allowClose, closeRequested, started;
         private long pendingId;
@@ -54,6 +54,8 @@ namespace LynkSignTokenHelper
             this.miniProgramLauncher = miniProgramLauncher ?? new LynkMiniProgramLauncher();
             this.workArea = workArea ?? (() => SystemParameters.WorkArea);
             InitializeComponent();
+            Title = "领克凭据助手 " + BuildInfo.Version;
+            AppVersion.Text = "  " + BuildInfo.Version;
             Icon = BitmapFrame.Create(new Uri("pack://application:,,,/LynkSignTokenHelper-windows-x64;component/Branding/lynk-icon.ico"));
             Address.Text = BuildInfo.DefaultServer;
             toastTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2.1) };
@@ -153,17 +155,18 @@ namespace LynkSignTokenHelper
             ImportantBodyHost.MaxHeight = Math.Max(24, Math.Min(220, Height - 384));
             LoginCardHost.Width = Math.Min(388, Math.Max(280, Width - 64));
             bool compactLogin = Height < 650;
-            LoginCardHost.Padding = compactLogin ? new Thickness(18, 12, 18, 12) : new Thickness(24, 22, 24, 22);
+            LoginCardHost.Padding = compactLogin ? new Thickness(18, 10, 18, 10) : new Thickness(24, 20, 24, 20);
             LoginCardHost.Margin = new Thickness(20, compactLogin ? 10 : 16, 20, compactLogin ? 10 : 16);
-            LoginHeader.Margin = new Thickness(0, 0, 0, compactLogin ? 12 : 18);
+            LoginHeader.Margin = new Thickness(0, 0, 0, compactLogin ? 8 : 14);
             LoginSubtitle.Visibility = Show(!compactLogin);
             AddressLabel.Margin = new Thickness(0, 0, 0, compactLogin ? 4 : 6);
-            UsernameLabel.Margin = new Thickness(0, 0, 0, compactLogin ? 4 : 6);
-            PasswordLabel.Margin = new Thickness(0, compactLogin ? 10 : 14, 0, compactLogin ? 4 : 6);
-            LoginButton.Margin = new Thickness(0, compactLogin ? 12 : 16, 0, 0);
+            UsernameLabel.Margin = new Thickness(0, compactLogin ? 6 : 12, 0, compactLogin ? 4 : 6);
+            PasswordLabel.Margin = new Thickness(0, compactLogin ? 6 : 12, 0, compactLogin ? 4 : 6);
+            LoginActions.Height = compactLogin ? 40 : 44;
+            BrowserLoginHint.Visibility = Show(!compactLogin);
             Address.Height = Username.Height = Password.Height = VisiblePassword.Height = compactLogin ? 40 : 42;
-            AllowHttp.Margin = new Thickness(0, compactLogin ? 8 : 18, 0, compactLogin ? 12 : 18);
-            LoginNoticeHost.Height = compactLogin ? 44 : 48;
+            AllowHttp.Margin = new Thickness(0, compactLogin ? 6 : 14, 0, compactLogin ? 8 : 14);
+            LoginNoticeHost.Height = 36;
         }
         private static void Fade(UIElement element)
         {
@@ -191,18 +194,12 @@ namespace LynkSignTokenHelper
                     if (!loggedIn) Address.Focus();
                 }
                 Address.IsEnabled = Username.IsEnabled = Password.IsEnabled = VisiblePassword.IsEnabled = AllowHttp.IsEnabled = TogglePassword.IsEnabled = !busy && alive;
-                LoginButtonText.Text = closeRequested || snapshot.closing ? "正在恢复并退出…" : busy ? "正在连接…" : "登录服务器";
+                LoginButtonText.Text = closeRequested || snapshot.closing ? "正在退出…" : busy && lastAction == "login" ? "正在登录…" : "账号密码登录";
                 UpdateLoginButton();
-                PasswordLoginPanel.Visibility = Show(passwordLogin);
-                BrowserLoginPanel.Visibility = Show(!passwordLogin);
-                LoginModeButton.Content = passwordLogin ? "返回浏览器授权登录" : "使用账号密码登录";
-                LoginModeButton.IsEnabled = !busy && alive;
-                LoginSubtitle.Text = passwordLogin ? "使用 Lynk Sign 面板账号登录" : "通过网页授权连接面板";
                 bool authorizing = state.authorizing || (busy && lastAction == "login/browser");
-                BrowserLoginButtonText.Text = closeRequested ? "正在退出…" : authorizing ? "等待浏览器授权…" : !ready ? "正在准备…" : "浏览器授权登录";
-                BrowserLoginHint.Text = authorizing ? "请在浏览器中完成登录并确认授权，授权请求有效期为 5 分钟。" : "在系统浏览器中登录面板，确认授权后自动进入工具。";
-                BrowserLoginActions.Visibility = authorizing ? Visibility.Visible : Visibility.Collapsed;
-                LoginModeButton.Visibility = authorizing ? Visibility.Collapsed : Visibility.Visible;
+                BrowserLoginButtonText.Text = closeRequested ? "正在退出…" : authorizing ? "等待授权…" : !ready ? "正在准备…" : "网页授权登录";
+                BrowserLoginHint.Text = authorizing ? "请在浏览器中确认授权，授权请求有效期为 5 分钟。" : "网页授权只需服务器地址；也可填写面板账号密码直接登录。";
+                BrowserLoginActions.Visibility = authorizing ? Visibility.Visible : Visibility.Hidden;
                 CancelBrowserLoginButton.IsEnabled = authorizing && !closeRequested && alive;
                 ReopenAuthorizationButton.IsEnabled = authorizing && !string.IsNullOrEmpty(state.authorization_url) && !closeRequested;
                 BackButton.Visibility = state.logged_in ? Visibility.Visible : Visibility.Hidden;
@@ -408,14 +405,6 @@ namespace LynkSignTokenHelper
             TogglePassword.ToolTip = showPassword ? "隐藏密码" : "显示密码";
             if (showPassword) VisiblePassword.Focus(); else { VisiblePassword.Clear(); Password.Focus(); }
         }
-        private void LoginModeClicked(object sender, RoutedEventArgs args)
-        {
-            if (Busy) return;
-            passwordLogin = !passwordLogin;
-            Password.Clear(); VisiblePassword.Clear();
-            Render();
-            if (passwordLogin) Username.Focus(); else Address.Focus();
-        }
         private void BrowserLoginClicked(object sender, RoutedEventArgs args)
         {
             if (!BrowserLoginButton.IsEnabled) return;
@@ -453,7 +442,6 @@ namespace LynkSignTokenHelper
         {
             CancelMiniProgramReminder();
             miniProgramOperation?.Cancel();
-            passwordLogin = false;
             showPassword = false;
             Password.Visibility = Visibility.Visible;
             VisiblePassword.Visibility = Visibility.Collapsed;
@@ -551,8 +539,11 @@ namespace LynkSignTokenHelper
             }
             if (args.Key == Key.Enter && LoginView.Visibility == Visibility.Visible)
             {
-                if (passwordLogin && LoginButton.IsEnabled) { LoginClicked(sender, args); args.Handled = true; }
-                else if (!passwordLogin && BrowserLoginButton.IsEnabled) { BrowserLoginClicked(sender, args); args.Handled = true; }
+                IInputElement focused = FocusManager.GetFocusedElement(this);
+                if (focused is Button) return;
+                bool credentialFocus = focused == Username || focused == Password || focused == VisiblePassword;
+                if (LoginButton.IsEnabled) { LoginClicked(sender, args); args.Handled = true; }
+                else if (!credentialFocus && BrowserLoginButton.IsEnabled) { BrowserLoginClicked(sender, args); args.Handled = true; }
             }
             if (args.Key != Key.Escape) return;
             args.Handled = true;

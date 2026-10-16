@@ -26,50 +26,47 @@
             <Image Source="{StaticResource AppLogo}" Width="40" Height="40" HorizontalAlignment="Left" AutomationProperties.Name="lynk 项目图标" />
             <TextBlock Grid.Column="1" Text="连接服务器" FontSize="24" FontWeight="SemiBold" VerticalAlignment="Center" />
             <Button x:Name="BackButton" Grid.Column="2" Content="返回" Style="{StaticResource Subtle}" Padding="8,0" Click="BackClicked" Visibility="Hidden" ToolTip="返回工作台" AutomationProperties.Name="返回工作台" />
-            <TextBlock x:Name="LoginSubtitle" Grid.Row="1" Grid.ColumnSpan="2" Text="通过网页授权连接面板" Style="{StaticResource Muted}" Margin="0,8,0,0" />
+            <TextBlock x:Name="LoginSubtitle" Grid.Row="1" Grid.ColumnSpan="2" Text="选择一种方式连接面板" Style="{StaticResource Muted}" Margin="0,8,0,0" />
             <Button x:Name="LoginUpdateButton" Grid.Row="1" Grid.Column="2" Content="检查更新" Style="{StaticResource Subtle}" FontSize="12" MinHeight="28" Height="28" Padding="8,0" Margin="8,4,0,0" Click="CheckUpdatesClicked" AutomationProperties.Name="检查软件更新" />
           </Grid>
           <TextBlock x:Name="AddressLabel" Text="服务器地址" Margin="0,0,0,6" />
           <TextBox x:Name="Address" AutomationProperties.Name="服务器地址" Height="42" TextChanged="LoginInputChanged" ToolTip="完整的 HTTP 或 HTTPS 面板地址，可包含端口和子路径" />
-          <CheckBox x:Name="AllowHttp" Content="允许内网 HTTP 明文连接" Margin="0,18,0,18" />
-          <StackPanel x:Name="BrowserLoginPanel">
-            <TextBlock x:Name="BrowserLoginHint" Height="42" Text="在系统浏览器中登录面板，确认授权后自动进入工具。" Foreground="{StaticResource MutedBrush}" FontSize="13" LineHeight="21" Margin="0,0,0,20" />
-            <Button x:Name="BrowserLoginButton" Style="{StaticResource Primary}" Click="BrowserLoginClicked" IsEnabled="False" Height="44">
-              <StackPanel Orientation="Horizontal">
-                <Path Data="{StaticResource Icon_arrow_exit}" Style="{StaticResource Icon}" Margin="0,0,10,0" />
-                <TextBlock x:Name="BrowserLoginButtonText" Text="正在准备…" Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
-              </StackPanel>
-            </Button>
-            <Grid x:Name="BrowserLoginActions" Height="36" Margin="0,12,0,0" Visibility="Collapsed">
-              <Button x:Name="ReopenAuthorizationButton" Content="重新打开授权页" Style="{StaticResource Subtle}" HorizontalAlignment="Left" Click="ReopenAuthorizationClicked" />
-              <Button x:Name="CancelBrowserLoginButton" Content="取消" Style="{StaticResource Subtle}" HorizontalAlignment="Right" Click="CancelBrowserLoginClicked" />
-            </Grid>
-          </StackPanel>
-          <StackPanel x:Name="PasswordLoginPanel" Visibility="Collapsed">
-            <TextBlock x:Name="UsernameLabel" Text="面板账号" Margin="0,14,0,6" />
+          <StackPanel x:Name="PasswordLoginPanel">
+            <TextBlock x:Name="UsernameLabel" Text="面板账号" Margin="0,12,0,6" />
             <TextBox x:Name="Username" AutomationProperties.Name="面板账号" Height="42" TextChanged="LoginInputChanged" />
-            <TextBlock x:Name="PasswordLabel" Text="面板密码" Margin="0,14,0,6" />
+            <TextBlock x:Name="PasswordLabel" Text="面板密码" Margin="0,12,0,6" />
             <Grid>
-              <Grid.ColumnDefinitions>
-                <ColumnDefinition />
-                <ColumnDefinition Width="40" />
-              </Grid.ColumnDefinitions>
-              <PasswordBox x:Name="Password" AutomationProperties.Name="面板密码" Height="42" PasswordChanged="PasswordChanged" />
-              <TextBox x:Name="VisiblePassword" AutomationProperties.Name="显示的面板密码" Height="42" Visibility="Collapsed" TextChanged="VisiblePasswordChanged" />
-              <Button x:Name="TogglePassword" Grid.Column="1" Style="{StaticResource Subtle}" Click="TogglePasswordClicked" ToolTip="显示密码" AutomationProperties.Name="显示或隐藏密码">
+              <PasswordBox x:Name="Password" AutomationProperties.Name="面板密码" Height="42" Padding="12,10,44,10" PasswordChanged="PasswordChanged" />
+              <TextBox x:Name="VisiblePassword" AutomationProperties.Name="显示的面板密码" Height="42" Padding="12,10,44,10" Visibility="Collapsed" TextChanged="VisiblePasswordChanged" />
+              <Button x:Name="TogglePassword" Width="40" Height="40" MinHeight="36" Margin="0,0,2,0" HorizontalAlignment="Right" Style="{StaticResource Subtle}" Click="TogglePasswordClicked" ToolTip="显示密码" AutomationProperties.Name="显示或隐藏密码">
                 <Path x:Name="PasswordIcon" Data="{StaticResource Icon_eye}" Style="{StaticResource Icon}" />
               </Button>
             </Grid>
-            <Button x:Name="LoginButton" Style="{StaticResource Primary}" Click="LoginClicked" IsEnabled="False">
+          </StackPanel>
+          <CheckBox x:Name="AllowHttp" Content="允许内网 HTTP 明文连接" Margin="0,14,0,14" />
+          <Grid x:Name="LoginActions" Height="44">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition />
+              <ColumnDefinition Width="12" />
+              <ColumnDefinition />
+            </Grid.ColumnDefinitions>
+            <Button x:Name="BrowserLoginButton" Style="{StaticResource Primary}" Click="BrowserLoginClicked" IsEnabled="False" FontSize="13" Padding="10,0">
               <StackPanel Orientation="Horizontal">
-                <TextBlock x:Name="LoginButtonText" Text="正在准备…" Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
-                <Path Data="{StaticResource Icon_arrow_right}" Style="{StaticResource Icon}" Margin="12,0,0,0" />
+                <Path Data="{StaticResource Icon_arrow_exit}" Style="{StaticResource Icon}" Width="17" Height="17" Margin="0,0,6,0" />
+                <TextBlock x:Name="BrowserLoginButtonText" Text="正在准备…" FontSize="13" Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
               </StackPanel>
             </Button>
-          </StackPanel>
-          <Button x:Name="LoginModeButton" Content="使用账号密码登录" Style="{StaticResource Subtle}" Height="36" Margin="0,12,0,0" Click="LoginModeClicked" />
-          <Grid x:Name="LoginNoticeHost" Height="48" Margin="0,12,0,0">
-            <TextBlock x:Name="LoginNotice" Foreground="#EDB5B7" FontSize="13" LineHeight="20" VerticalAlignment="Center" Visibility="Hidden" ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}" />
+            <Button x:Name="LoginButton" Grid.Column="2" Click="LoginClicked" IsEnabled="False" FontSize="13" Padding="10,0">
+              <TextBlock x:Name="LoginButtonText" Text="账号密码登录" FontSize="13" Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
+            </Button>
+          </Grid>
+          <TextBlock x:Name="BrowserLoginHint" Height="36" Text="网页授权只需服务器地址；也可填写面板账号密码直接登录。" Foreground="{StaticResource MutedBrush}" FontSize="12" LineHeight="18" Margin="0,10,0,0" />
+          <Grid x:Name="LoginNoticeHost" Height="36" Margin="0,4,0,0">
+            <Grid x:Name="BrowserLoginActions" Height="32" Visibility="Hidden">
+              <Button x:Name="ReopenAuthorizationButton" Content="重新打开授权页" Style="{StaticResource Subtle}" MinHeight="28" Height="32" Padding="0" FontSize="12" HorizontalAlignment="Left" Click="ReopenAuthorizationClicked" />
+              <Button x:Name="CancelBrowserLoginButton" Content="取消" Style="{StaticResource Subtle}" MinHeight="28" Height="32" Padding="8,0" FontSize="12" HorizontalAlignment="Right" Click="CancelBrowserLoginClicked" />
+            </Grid>
+            <TextBlock x:Name="LoginNotice" Foreground="#EDB5B7" FontSize="12" LineHeight="18" VerticalAlignment="Center" Visibility="Hidden" ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}" />
           </Grid>
         </StackPanel>
       </Border>
@@ -89,7 +86,7 @@
           <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
             <Image Source="{StaticResource AppLogo}" Width="36" Height="36" Margin="0,0,12,0" AutomationProperties.Name="lynk 项目图标" />
             <StackPanel>
-              <TextBlock Text="领克凭据助手" FontSize="18" FontWeight="SemiBold" />
+              <TextBlock FontSize="18" FontWeight="SemiBold"><Run Text="领克凭据助手" /><Run x:Name="AppVersion" FontSize="12" FontWeight="Normal" Foreground="{StaticResource MutedBrush}" /></TextBlock>
               <TextBlock x:Name="ServerAddress" Style="{StaticResource Muted}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" MaxWidth="370" />
             </StackPanel>
           </StackPanel>

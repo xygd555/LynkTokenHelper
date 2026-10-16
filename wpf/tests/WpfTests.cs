@@ -172,7 +172,7 @@ internal static partial class WpfTests
     private static void CheckLoginFits(MainWindow window)
     {
         var root = Control<Grid>(window, "Root");
-        foreach (string name in new[] { "LoginCardHost", "Address", "Username", "Password", "LoginButton", "LoginNotice", "BackButton", "BrowserLoginButton", "LoginModeButton", "BrowserLoginActions" })
+        foreach (string name in new[] { "LoginCardHost", "Address", "Username", "Password", "LoginButton", "LoginNotice", "BackButton", "BrowserLoginButton", "LoginActions", "LoginUpdateButton", "BrowserLoginActions" })
         {
             if (!Control<FrameworkElement>(window, name).IsVisible) continue;
             Rect bounds = Bounds(window, name);
@@ -223,7 +223,11 @@ internal static partial class WpfTests
             int opened = 0;
             window.OpenBrowser = address => { opened++; Check(address.StartsWith("https://sign.example.com/helper/authorize?request_id="), "browser opened a different server"); if (scenario == "browser-error") throw new InvalidOperationException(); };
             window.Show(); Until(() => core.Started); core.Emit(); Pump();
-            Check(Control<FrameworkElement>(window, "BrowserLoginPanel").IsVisible && !Control<FrameworkElement>(window, "PasswordLoginPanel").IsVisible, "browser authorization is not the primary entry");
+            Check(Control<FrameworkElement>(window, "PasswordLoginPanel").IsVisible && Control<Button>(window, "BrowserLoginButton").IsVisible, "login options are not shown together");
+            Check(!Control<Button>(window, "LoginButton").IsEnabled, "empty credentials enabled password login");
+            string version = "v" + FileVersionInfo.GetVersionInfo(typeof(MainWindow).Assembly.Location).FileVersion;
+            version = version.Substring(0, version.Length - 2);
+            Check(window.Title == "领克凭据助手 " + version && ((System.Windows.Documents.Run)window.FindName("AppVersion")).Text.Trim() == version, "window or workbench title misses build version");
             if (scenario == "server-switch")
             {
                 core.Snapshot.state.logged_in = true; core.Emit(); Until(() => Control<FrameworkElement>(window, "MainView").IsVisible);
@@ -231,10 +235,20 @@ internal static partial class WpfTests
             }
             Control<TextBox>(window, "Address").Text = "https://sign.example.com";
             Pump();
+            Check(Control<Button>(window, "BrowserLoginButton").IsEnabled, "browser login requires account credentials");
+            if (scenario == "success")
+            {
+                Control<TextBox>(window, "Username").Text = "测试用户";
+                Control<PasswordBox>(window, "Password").Password = "synthetic-password";
+                Control<Button>(window, "BrowserLoginButton").Focus();
+                PressKey(window, Key.Enter);
+                Check(!core.Snapshot.state.logged_in && !core.Snapshot.state.authorizing, "preview Enter hijacked an explicitly focused login button");
+            }
             Capture(window, "wpf-browser-ready-100");
             Rect before = Bounds(window, "LoginCardHost");
             Click(window, "BrowserLoginButton");
             Until(() => opened == 1);
+            Check(Control<PasswordBox>(window, "Password").Password.Length == 0 && Control<TextBox>(window, "VisiblePassword").Text.Length == 0, "browser authorization retained the typed password");
             if (scenario == "browser-error")
             {
                 CheckImportantNotice(window, "默认浏览器"); Acknowledge(window);
@@ -242,7 +256,7 @@ internal static partial class WpfTests
             }
             else
             {
-                Check(!Control<Button>(window, "BrowserLoginButton").IsEnabled && !Control<Button>(window, "LoginModeButton").IsEnabled, "authorization permits conflicting duplicate actions");
+                Check(!Control<Button>(window, "BrowserLoginButton").IsEnabled && !Control<Button>(window, "LoginButton").IsEnabled, "authorization permits conflicting duplicate actions");
                 CheckLoginFits(window);
                 Check(Bounds(window, "LoginCardHost") == before, "authorization pending state moved the login card");
                 core.Emit(); Pump(); Check(opened == 1, "state update opened browser again");
@@ -251,7 +265,12 @@ internal static partial class WpfTests
                 if (scenario == "cancel")
                 {
                     Click(window, "CancelBrowserLoginButton"); Until(() => Control<Button>(window, "BrowserLoginButton").IsEnabled);
-                    Click(window, "LoginModeButton"); Check(Control<FrameworkElement>(window, "PasswordLoginPanel").IsVisible, "cancelled authorization did not allow password fallback");
+                    Check(Control<FrameworkElement>(window, "PasswordLoginPanel").IsVisible && Control<TextBox>(window, "Username").IsEnabled, "cancelled authorization did not restore password login");
+                    Control<TextBox>(window, "Username").Text = "测试用户";
+                    Control<PasswordBox>(window, "Password").Password = "synthetic-password";
+                    Control<PasswordBox>(window, "Password").Focus();
+                    PressKey(window, Key.Enter);
+                    Until(() => Control<FrameworkElement>(window, "MainView").IsVisible);
                 }
                 else
                 {
@@ -277,10 +296,17 @@ internal static partial class WpfTests
             Until(() => core.Started);
             core.Emit(); Pump();
             CheckLoginFits(window);
+            Control<TextBox>(window, "Address").Text = "https://sign.example.com";
+            Control<TextBox>(window, "Username").Focus();
+            PressKey(window, Key.Enter);
+            Check(!core.Snapshot.state.authorizing, "incomplete account input accidentally started browser authorization");
             Capture(window, area.Height == 600 ? "wpf-browser-login-small-100" : "wpf-browser-login-100");
             if (area.Height == 1000) Capture(window, "wpf-browser-login-150", 1.5);
-            Click(window, "LoginModeButton");
             CheckLoginFits(window);
+            Rect browser = Bounds(window, "BrowserLoginButton"), password = Bounds(window, "LoginButton");
+            Check(Math.Abs(browser.Top - password.Top) < 1 && Math.Abs(browser.Height - password.Height) < 1 && browser.Right + 10 <= password.Left, "login actions are not aligned side by side");
+            Rect field = Bounds(window, "Password"), eye = Bounds(window, "TogglePassword");
+            Check(field.Contains(eye), "password visibility button is outside password field");
             double buttonTop = Bounds(window, "LoginButton").Top;
             core.Snapshot.state.message = "请先在面板修改初始密码，再登录工具";
             core.Emit();
@@ -356,10 +382,9 @@ internal static partial class WpfTests
         window.Show();
         Until(() => core.Started);
         core.Emit();
-        Until(() => Text(window, "LoginButtonText") == "登录服务器");
+        Until(() => Text(window, "LoginButtonText") == "账号密码登录");
         Check(Control<TextBox>(window, "Address").Text == expectedDefaultServer, "build-time default server was not prefilled");
         Check(window.ResizeMode == ResizeMode.CanMinimize && window.Width == 520 && window.Height == 700, "login window is not fixed");
-        Click(window, "LoginModeButton");
         Control<TextBox>(window, "Address").Text = "https://sign.example.com:8443/lynk";
         Control<TextBox>(window, "Username").Text = "测试用户";
         Control<PasswordBox>(window, "Password").Password = "synthetic-password";
