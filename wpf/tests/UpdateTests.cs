@@ -49,6 +49,7 @@ internal static partial class WpfTests
     }
     private static void UpdateServiceTests()
     {
+        UpdateMirrorServiceTests();
         byte[] bytes = Encoding.UTF8.GetBytes(new string('x', 180000));
         UpdateRelease value = SyntheticRelease(bytes);
         Check(GitHubToolUpdater.ParseRelease(ReleaseJson(value), "v1.9.0").Version == "v9.1.0", "new release not detected");
@@ -157,11 +158,12 @@ internal static partial class WpfTests
         public TaskCompletionSource<string> DownloadResult;
         public IProgress<UpdateProgress> Progress;
         public int Checks, Downloads, Prepared, Launched, Discarded;
+        public UpdateDownloadSource LastSource;
         public bool FailPrepare, FailLaunch, Cancelled;
         public Task<UpdateRelease> CheckAsync(CancellationToken token) { Checks++; token.Register(() => CheckResult.TrySetCanceled()); return CheckResult.Task; }
-        public Task<string> DownloadAsync(UpdateRelease release, IProgress<UpdateProgress> progress, CancellationToken token)
+        public Task<string> DownloadAsync(UpdateRelease release, IProgress<UpdateProgress> progress, CancellationToken token, UpdateDownloadSource source = UpdateDownloadSource.Default)
         {
-            Downloads++; Progress = progress; DownloadResult = new TaskCompletionSource<string>();
+            Downloads++; LastSource = source; Progress = progress; DownloadResult = new TaskCompletionSource<string>();
             token.Register(() => { Cancelled = true; DownloadResult.TrySetCanceled(); }); return DownloadResult.Task;
         }
         public PreparedUpdate Prepare(string download, UpdateRelease release) { Prepared++; if (FailPrepare) throw new UnauthorizedAccessException(); return new PreparedUpdate { WorkerPath = "synthetic-updater" }; }
@@ -178,6 +180,18 @@ internal static partial class WpfTests
         FrameworkElement button = (FrameworkElement)window.FindName("UpdateButton");
         Rect bounds = button.TransformToAncestor(window).TransformBounds(new Rect(button.RenderSize));
         Check(bounds.Bottom < window.ActualHeight && bounds.Right < window.ActualWidth && bounds.Top >= 0, "update action outside dialog");
+        FrameworkElement sourcePanel = (FrameworkElement)window.FindName("DownloadSourcePanel");
+        if (sourcePanel.IsVisible)
+        {
+            Rect sourceBounds = sourcePanel.TransformToAncestor(window).TransformBounds(new Rect(sourcePanel.RenderSize));
+            Check(sourceBounds.Bottom + 8 <= bounds.Top && sourceBounds.Left >= 0 && sourceBounds.Right < window.ActualWidth, "download source overlaps actions or exceeds dialog width");
+            FrameworkElement progress = (FrameworkElement)window.FindName("ProgressPanel");
+            if (progress.IsVisible)
+            {
+                Rect progressBounds = progress.TransformToAncestor(window).TransformBounds(new Rect(progress.RenderSize));
+                Check(progressBounds.Bottom + 8 <= sourceBounds.Top, "download progress or error overlaps route selection");
+            }
+        }
     }
     private static void ActualUpdateWorker()
     {
@@ -212,7 +226,7 @@ internal static partial class WpfTests
     }
     private static void UpdateWorkflowTests()
     {
-        foreach (string scenario in new[] { "later", "cancel", "success", "prepare-error", "close-error", "launch-error", "deferred" })
+        foreach (string scenario in new[] { "later", "cancel", "success", "prepare-error", "close-error", "launch-error", "deferred", "retry" })
         {
             var core = new FakeCore { FailFirstClose = scenario == "close-error" };
             var updater = new FakeUpdater { FailPrepare = scenario == "prepare-error", FailLaunch = scenario == "launch-error" };
@@ -227,20 +241,24 @@ internal static partial class WpfTests
                 try
                 {
                     Button confirm = (Button)dialog.FindName("UpdateButton"), later = (Button)dialog.FindName("LaterButton");
+                    ComboBox source = (ComboBox)dialog.FindName("DownloadSource");
                     Check(dialogWatch.Elapsed < TimeSpan.FromSeconds(12), "update dialog workflow timed out");
                     if (step == 0)
                     {
                         Check(updater.Downloads == 0 && updater.Prepared == 0 && updater.Launched == 0, "update started before confirmation");
                         Check(((TextBlock)dialog.FindName("Description")).Text.Contains("Token") && ((TextBlock)dialog.FindName("VersionLabel")).Text.Contains("v9.1.0"), "confirmation misses version or token notice");
                         Check(!IsWindowEnabled(new WindowInteropHelper(window).Handle) && FocusManager.GetFocusedElement(dialog) == later, "update dialog is not modal or lacks safe initial focus");
-                        CaptureUpdateWindow(dialog, "wpf-update-confirm-100");
+                        Check(source.SelectedIndex == 0 && source.IsEnabled && source.Items.Cast<string>().SequenceEqual(new[] { "默认线路", "备用线路 1", "备用线路 2", "GitHub 源" }), "download routes differ from the panel or lack the default");
+                        if (scenario == "retry") { dialog.Width = 360; source.SelectedIndex = 1; }
+                        CaptureUpdateWindow(dialog, scenario == "retry" ? "wpf-update-confirm-narrow-100" : "wpf-update-confirm-100");
                         CaptureUpdateWindow(dialog, "wpf-update-confirm-150", 1.5);
                         if (scenario == "later" || scenario == "deferred") { observe.Stop(); later.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); step = 9; return; }
                         confirm.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); step = 1;
                     }
                     else if (step == 1)
                     {
-                        Check(updater.Downloads == 1 && !confirm.IsEnabled, "download duplicate click guard missing");
+                        Check(updater.Downloads == 1 && !confirm.IsEnabled && !source.IsEnabled, "download duplicate click or source-change guard missing");
+                        Check(updater.LastSource == (scenario == "retry" ? UpdateDownloadSource.Backup1 : UpdateDownloadSource.Default), "selected mirror did not reach the updater");
                         updater.Progress.Report(new UpdateProgress { Received = 8 * 1048576, Total = 20 * 1048576 }); step = 2;
                     }
                     else if (step == 2)
@@ -248,7 +266,22 @@ internal static partial class WpfTests
                         Check(((ProgressBar)dialog.FindName("DownloadProgress")).Value == 40, "download progress not displayed");
                         CaptureUpdateWindow(dialog, "wpf-update-download-100");
                         if (scenario == "cancel") { observe.Stop(); later.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); step = 9; }
+                        else if (scenario == "retry") { updater.DownloadResult.SetException(new IOException("当前线路下载失败，请切换线路后重试。")); step = 3; }
                         else { updater.DownloadResult.SetResult(Path.Combine(output, "synthetic-download.exe")); step = 3; }
+                    }
+                    else if (step == 3 && scenario == "retry" && confirm.IsEnabled)
+                    {
+                        Check(source.IsEnabled && ((TextBlock)dialog.FindName("ProgressDetail")).Text.Contains("切换"), "failed download cannot switch mirrors");
+                        CaptureUpdateWindow(dialog, "wpf-update-mirror-error-narrow-100");
+                        source.IsDropDownOpen = true; Pump();
+                        CaptureUpdateWindow(dialog, "wpf-update-mirror-options-narrow-100");
+                        source.IsDropDownOpen = false; source.SelectedIndex = 2;
+                        confirm.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); step = 4;
+                    }
+                    else if (step == 4)
+                    {
+                        Check(updater.Downloads == 2 && updater.LastSource == UpdateDownloadSource.Backup2 && !source.IsEnabled, "retry did not use the new mirror exactly once");
+                        observe.Stop(); later.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); step = 9;
                     }
                     else if (step == 3 && scenario == "prepare-error" && confirm.IsEnabled)
                     {

@@ -3,7 +3,7 @@
   <Grid Margin="20">
     <Border Background="#2B3038" BorderBrush="#2AFFFFFF" BorderThickness="1" CornerRadius="16" Padding="24">
       <Grid>
-        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
         <Grid>
           <Grid.ColumnDefinitions><ColumnDefinition Width="58"/><ColumnDefinition/></Grid.ColumnDefinitions>
           <Border Width="44" Height="44" CornerRadius="13" Background="#263D59" HorizontalAlignment="Left"><Path Data="{StaticResource Icon_arrow_sync}" Fill="{StaticResource AccentBrush}" Width="24" Height="24" Stretch="Uniform"/></Border>
@@ -15,7 +15,7 @@
             <Grid><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions><TextBlock x:Name="NotesTitle" Text="更新说明" FontSize="13" FontWeight="SemiBold" Margin="0,0,0,10"/><ScrollViewer x:Name="NotesScroll" Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"><TextBlock x:Name="ReleaseNotes" Style="{StaticResource Muted}"/></ScrollViewer></Grid>
           </Border>
           <StackPanel x:Name="ProgressPanel" VerticalAlignment="Center" Visibility="Collapsed">
-            <TextBlock x:Name="ProgressLabel" Text="正在下载…" FontWeight="SemiBold" Margin="0,0,0,14"/>
+            <TextBlock x:Name="ProgressLabel" Text="正在下载…" TextWrapping="Wrap" FontWeight="SemiBold" Margin="0,0,0,14"/>
             <ProgressBar x:Name="DownloadProgress" Height="8" Maximum="100" Foreground="{StaticResource AccentBrush}" Background="#404854" BorderThickness="0">
               <ProgressBar.Template><ControlTemplate TargetType="ProgressBar"><Grid x:Name="PART_Track" ClipToBounds="True"><Border Background="{TemplateBinding Background}" CornerRadius="4"/><Border x:Name="PART_Indicator" Background="{TemplateBinding Foreground}" CornerRadius="4" HorizontalAlignment="Left"/></Grid></ControlTemplate></ProgressBar.Template>
             </ProgressBar>
@@ -23,7 +23,12 @@
             <TextBlock x:Name="ProgressHint" Text="下载完成后会校验文件，并恢复代理后重启。" Style="{StaticResource Muted}" Margin="0,24,0,0"/>
           </StackPanel>
         </Grid>
-        <Grid Grid.Row="3"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="12"/><ColumnDefinition/></Grid.ColumnDefinitions><Button x:Name="LaterButton" Content="稍后" Click="LaterClicked" Height="42"/><Button x:Name="UpdateButton" Grid.Column="2" Content="更新并重启" Style="{StaticResource Primary}" Click="UpdateClicked" Height="42"/></Grid>
+        <Grid x:Name="DownloadSourcePanel" Grid.Row="3" Margin="0,0,0,16">
+          <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition/></Grid.ColumnDefinitions>
+          <TextBlock Text="下载线路" VerticalAlignment="Center" Margin="0,0,12,0"/>
+          <ComboBox x:Name="DownloadSource" Grid.Column="1" SelectedIndex="0" AutomationProperties.Name="下载线路"/>
+        </Grid>
+        <Grid Grid.Row="4"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="12"/><ColumnDefinition/></Grid.ColumnDefinitions><Button x:Name="LaterButton" Content="稍后" Click="LaterClicked" Height="42"/><Button x:Name="UpdateButton" Grid.Column="2" Content="更新并重启" Style="{StaticResource Primary}" Click="UpdateClicked" Height="42"/></Grid>
       </Grid>
     </Border>
   </Grid>

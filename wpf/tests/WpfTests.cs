@@ -43,6 +43,12 @@ internal static partial class WpfTests
                     UpdateServiceTests(); UpdateWorkflowTests(); ActualUpdateWorker();
                     Console.WriteLine("更新服务、文件替换与原生更新界面验证通过。");
                 }
+                else if (args.Length > 0 && args[0] == "--updates-download-live")
+                {
+                    output = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "wpf-native"));
+                    Directory.CreateDirectory(output);
+                    UpdateMirrorLiveTest();
+                }
                 else if (args.Length > 1 && args[0] == "--authorization-live")
                 {
                     output = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "wpf-native"));

@@ -30,10 +30,11 @@ namespace LynkSignTokenHelper
         public string PlanPath { get; set; }
         public string WorkerPath { get; set; }
     }
+    public enum UpdateDownloadSource { Default, Backup1, Backup2, GitHub }
     public interface IToolUpdater
     {
         Task<UpdateRelease> CheckAsync(CancellationToken cancellationToken);
-        Task<string> DownloadAsync(UpdateRelease release, IProgress<UpdateProgress> progress, CancellationToken cancellationToken);
+        Task<string> DownloadAsync(UpdateRelease release, IProgress<UpdateProgress> progress, CancellationToken cancellationToken, UpdateDownloadSource source = UpdateDownloadSource.Default);
         PreparedUpdate Prepare(string download, UpdateRelease release);
         void Launch(PreparedUpdate update);
         void Discard(PreparedUpdate update);
@@ -120,11 +121,31 @@ namespace LynkSignTokenHelper
         private static bool IsHttps(Uri uri) => uri.Scheme == "https" && uri.IsDefaultPort && string.IsNullOrEmpty(uri.UserInfo) && string.IsNullOrEmpty(uri.Fragment);
         private static bool IsDownloadRedirect(Uri uri) => IsHttps(uri) &&
             (uri.Host == "github.com" || uri.Host == "release-assets.githubusercontent.com" || uri.Host == "objects.githubusercontent.com");
-        public async Task<string> DownloadAsync(UpdateRelease release, IProgress<UpdateProgress> progress, CancellationToken cancellationToken)
+        private static string DownloadPrefix(UpdateDownloadSource source)
+        {
+            // Keep these routes aligned with the panel's helper download dialog.
+            switch (source)
+            {
+                case UpdateDownloadSource.Default: return "https://v4.gh-proxy.org/";
+                case UpdateDownloadSource.Backup1: return "https://ghproxy.net/";
+                case UpdateDownloadSource.Backup2: return "https://ghproxy.homeboyc.cn/";
+                case UpdateDownloadSource.GitHub: return "";
+                default: throw new InvalidDataException("下载线路无效。");
+            }
+        }
+        private static bool IsDownloadRedirect(Uri uri, UpdateDownloadSource source)
+        {
+            if (IsDownloadRedirect(uri)) return true;
+            if (!IsHttps(uri) || source == UpdateDownloadSource.GitHub) return false;
+            return uri.Host == new Uri(DownloadPrefix(source)).Host ||
+                (source == UpdateDownloadSource.Default && uri.Host == "gh-proxy.com");
+        }
+        public async Task<string> DownloadAsync(UpdateRelease release, IProgress<UpdateProgress> progress, CancellationToken cancellationToken, UpdateDownloadSource source = UpdateDownloadSource.Default)
         {
             ParseVersion(release.Version);
             if (!IsAssetUrl(release.DownloadUrl, release.Version) || !Regex.IsMatch(release.Sha256 ?? "", "^[a-fA-F0-9]{64}$") || release.Size <= 0 || release.Size > MaximumSize)
                 throw new InvalidDataException("更新文件信息无效。");
+            string prefix = DownloadPrefix(source);
             string folder = Path.Combine(directory, "updates", Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(folder);
             string file = Path.Combine(folder, "download.exe");
@@ -134,7 +155,7 @@ namespace LynkSignTokenHelper
                 using (HttpClient client = CreateClient())
                 {
                     timeout.CancelAfter(TimeSpan.FromMinutes(5));
-                    Uri address = new Uri(release.DownloadUrl);
+                    Uri address = new Uri(prefix + release.DownloadUrl);
                     for (int redirect = 0; redirect <= 5; redirect++)
                     {
                         using (HttpResponseMessage response = await client.GetAsync(address, HttpCompletionOption.ResponseHeadersRead, timeout.Token).ConfigureAwait(false))
@@ -145,7 +166,7 @@ namespace LynkSignTokenHelper
                                 Uri location = response.Headers.Location;
                                 if (location == null || redirect == 5) throw new IOException("更新下载跳转失败。");
                                 address = location.IsAbsoluteUri ? location : new Uri(address, location);
-                                if (!IsDownloadRedirect(address)) throw new IOException("更新下载地址不受信任。");
+                                if (!IsDownloadRedirect(address, source)) throw new IOException("更新下载地址不受信任。");
                                 continue;
                             }
                             response.EnsureSuccessStatusCode();
@@ -179,7 +200,8 @@ namespace LynkSignTokenHelper
                     throw new IOException("更新下载失败。");
                 }
             }
-            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested) { DeleteFile(file); throw new IOException("下载更新超时，请稍后重试。"); }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested) { DeleteFile(file); throw new IOException("下载更新超时，请切换线路后重试。"); }
+            catch (HttpRequestException) { DeleteFile(file); throw new IOException("当前线路下载失败，请切换线路后重试。"); }
             catch { DeleteFile(file); throw; }
         }
         public PreparedUpdate Prepare(string download, UpdateRelease release) => UpdateInstaller.Prepare(download, release, directory);
