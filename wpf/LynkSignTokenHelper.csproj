@@ -37,6 +37,8 @@
     <Compile Include="UpdateWindow.xaml.cs"><DependentUpon>UpdateWindow.xaml</DependentUpon></Compile>
     <Compile Include="CoreClient.cs" />
     <Compile Include="LynkMiniProgramLauncher.cs" />
+    <Compile Include="WeChatMiniProgramRuntime.cs" />
+    <Compile Include="WeChatRuntimeBridge.cs" />
     <Compile Include="MainWindow.xaml.cs">
       <DependentUpon>MainWindow.xaml</DependentUpon>
     </Compile>

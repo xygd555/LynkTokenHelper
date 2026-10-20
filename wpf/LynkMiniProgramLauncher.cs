@@ -30,11 +30,13 @@ namespace LynkSignTokenHelper
         public const string LaunchAddress = "weixin://launchapplet/?app_id=wx4e8c1172fe132106";
         private readonly IMiniProgramDesktop desktop;
         private readonly TimeSpan timeout;
+        private readonly IMiniProgramRuntime runtime;
 
-        public LynkMiniProgramLauncher(IMiniProgramDesktop desktop = null, TimeSpan? timeout = null)
+        public LynkMiniProgramLauncher(IMiniProgramDesktop desktop = null, TimeSpan? timeout = null, IMiniProgramRuntime runtime = null)
         {
             this.desktop = desktop ?? new WindowsMiniProgramDesktop();
             this.timeout = timeout ?? TimeSpan.FromSeconds(8);
+            this.runtime = runtime ?? (this.desktop is WindowsMiniProgramDesktop ? new WeChatMiniProgramRuntime() : null);
         }
 
         public async Task<bool> OpenAsync(CancellationToken cancellationToken)
@@ -57,7 +59,7 @@ namespace LynkSignTokenHelper
                 }
             }
             cancellationToken.ThrowIfCancellationRequested();
-            desktop.Launch();
+            if (runtime == null || !await runtime.TryLaunchAsync(cancellationToken)) desktop.Launch();
             var opening = Stopwatch.StartNew();
             while (desktop.FindWindows().Count == 0)
             {

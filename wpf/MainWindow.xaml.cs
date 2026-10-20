@@ -24,7 +24,7 @@ namespace LynkSignTokenHelper
         private readonly Func<Rect> workArea;
         private readonly IMiniProgramLauncher miniProgramLauncher;
         private CancellationTokenSource miniProgramOperation;
-        private bool openingMiniProgram;
+        private bool openingMiniProgram, closeAfterMiniProgram;
         private CoreSnapshot snapshot;
         private bool ready, alive, editLogin, showPassword, rendering, allowClose, closeRequested, started;
         private long pendingId;
@@ -507,6 +507,13 @@ namespace LynkSignTokenHelper
                     if (IsVisible) Render();
                 }
             }
+            if (closeAfterMiniProgram)
+            {
+                closeAfterMiniProgram = false;
+                if (failure != null) ShowImportantNotice("打开小程序失败", failure, false, Close);
+                else _ = Dispatcher.BeginInvoke(new Action(Close));
+                return;
+            }
             if (closeRequested || !IsVisible) return;
             if (failure != null) ShowImportantNotice("无法打开领克小程序", failure);
             else if (reopened.HasValue)
@@ -528,6 +535,13 @@ namespace LynkSignTokenHelper
         private void WindowClosing(object sender, CancelEventArgs args)
         {
             if (!allowClose && ImportantOverlay.Visibility == Visibility.Visible) { args.Cancel = true; ImportantConfirmButton.Focus(); return; }
+            if (openingMiniProgram)
+            {
+                args.Cancel = true;
+                closeAfterMiniProgram = true;
+                miniProgramOperation?.Cancel();
+                return;
+            }
             if (allowClose || !ready || !alive) return;
             args.Cancel = true;
             if (closeRequested) return;

@@ -50,6 +50,8 @@ internal static partial class WpfTests
                     ActualBrowserAuthorization(args[1]);
                 }
                 else if (args.Length > 0 && args[0] == "--wechat-smoke") ActualMiniProgram();
+                else if (args.Length > 0 && args[0] == "--runtime-live") ActualRuntimeLaunch();
+                else if (args.Length > 0 && args[0] == "--runtime") { RuntimeWorkflow(); RuntimeCloseWait(); }
                 else
                 {
                     output = Path.GetFullPath((interactive || browserOnly) ? Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "wpf-native") : args.Length > 0 ? args[0] : ".");
@@ -62,7 +64,7 @@ internal static partial class WpfTests
                         { UpdateServiceTests(); UpdateWorkflowTests(); ActualUpdateWorker(); }
                         if (!browserOnly)
                         {
-                        MiniProgramWorkflow();
+                        MiniProgramWorkflow(); RuntimeWorkflow(); RuntimeCloseWait();
                         MiniProgramUI();
                         MiniProgramLoginReminder();
                         ImportantNoticeWorkflow();
@@ -956,12 +958,13 @@ internal static partial class WpfTests
     private sealed class FakeMiniProgramLauncher : IMiniProgramLauncher
     {
         public int Calls;
+        public bool DeferCancellation;
         public TaskCompletionSource<bool> Pending;
         public Task<bool> OpenAsync(CancellationToken cancellationToken)
         {
             Calls++;
             Pending = new TaskCompletionSource<bool>();
-            cancellationToken.Register(() => Pending.TrySetCanceled());
+            cancellationToken.Register(() => { if (!DeferCancellation) Pending.TrySetCanceled(); });
             return Pending.Task;
         }
     }
