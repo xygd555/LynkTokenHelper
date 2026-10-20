@@ -18,6 +18,7 @@ namespace LynkSignTokenHelper
     {
         public string message { get; set; }
         public bool logged_in { get; set; }
+        public bool local_only { get; set; }
         public bool authorizing { get; set; }
         public string authorization_url { get; set; }
         public string username { get; set; }

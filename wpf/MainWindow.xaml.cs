@@ -64,7 +64,7 @@ namespace LynkSignTokenHelper
             miniProgramCaptureTimer.Tick += (sender, args) =>
             {
                 miniProgramCaptureTimer.Stop();
-                if (ShouldPromptForMiniProgramLogin()) ShowImportantNotice("请登录领克账号", "小程序已打开，暂未获取到新的凭据。\n\n如果小程序尚未登录，请登录领克账号；如果已经登录，请退出账号后重新登录。\n\n工具会继续抓取，获取凭据后自动提交。", false);
+                if (ShouldPromptForMiniProgramLogin()) ShowImportantNotice("请登录领克账号", "小程序已打开，暂未获取到新的凭据。\n\n如果小程序尚未登录，请登录领克账号；如果已经登录，请退出账号后重新登录。\n\n" + (snapshot?.state.local_only == true ? "工具会继续抓取，获取凭据后可在本地复制，不会上传。" : "工具会继续抓取，获取凭据后自动提交。"), false);
             };
             client.Updated += value => Dispatcher.BeginInvoke(new Action(() =>
             {
@@ -72,7 +72,7 @@ namespace LynkSignTokenHelper
                 bool browserAuthorized = lastAction == "login/browser" && pendingId != 0 && pendingId <= value.request_id && !value.pending && value.state.logged_in && string.IsNullOrEmpty(value.error);
                 if (pendingId != 0 && pendingId <= value.request_id && !value.pending)
                 {
-                    if ((lastAction == "login" || lastAction == "login/browser") && value.state.logged_in && string.IsNullOrEmpty(value.error)) editLogin = false;
+                    if (((lastAction == "login" || lastAction == "login/browser") && value.state.logged_in || lastAction == "capture/local" && value.state.local_only) && string.IsNullOrEmpty(value.error)) editLogin = false;
                     pendingId = 0;
                     lastAction = "";
                 }
@@ -180,7 +180,7 @@ namespace LynkSignTokenHelper
             try
             {
                 AppState state = snapshot.state;
-                bool loggedIn = state.logged_in && !editLogin;
+                bool loggedIn = (state.logged_in || state.local_only) && !editLogin;
                 bool captured = !string.IsNullOrEmpty(snapshot.token);
                 bool busy = Busy;
                 bool saved = state.submission == "saved" && snapshot.selected == state.selected_candidate;
@@ -202,14 +202,15 @@ namespace LynkSignTokenHelper
                 BrowserLoginActions.Visibility = authorizing ? Visibility.Visible : Visibility.Hidden;
                 CancelBrowserLoginButton.IsEnabled = authorizing && !closeRequested && alive;
                 ReopenAuthorizationButton.IsEnabled = authorizing && !string.IsNullOrEmpty(state.authorization_url) && !closeRequested;
-                BackButton.Visibility = state.logged_in ? Visibility.Visible : Visibility.Hidden;
+                BackButton.Visibility = state.logged_in || state.local_only ? Visibility.Visible : Visibility.Hidden;
                 BackButton.IsEnabled = !busy;
-                bool loginError = !loggedIn && !busy && !state.logged_in && !string.IsNullOrEmpty(state.message) && !state.message.StartsWith("请先登录服务器");
+                bool loginError = !loggedIn && !busy && !state.logged_in && !state.local_only && !string.IsNullOrEmpty(state.message) && !state.message.StartsWith("请先登录服务器");
                 LoginNotice.Visibility = loginError || (!alive && !string.IsNullOrEmpty(snapshot.error)) ? Visibility.Visible : Visibility.Hidden;
                 LoginNotice.Text = !alive ? snapshot.error : loginError ? state.message : "";
-                ServerAddress.Text = state.server_address ?? "";
-                ServerAddress.ToolTip = state.server_address;
-                AccountName.Text = state.username ?? "";
+                ServerAddress.Text = state.local_only ? "仅本地抓包 · 凭据不会上传" : state.server_address ?? "";
+                ServerAddress.ToolTip = ServerAddress.Text;
+                AccountName.Text = state.local_only ? "" : state.username ?? "";
+                SwitchButton.Content = state.local_only ? "登录服务器" : "切换服务器";
                 SwitchButton.IsEnabled = alive && !busy && !state.capturing;
                 CaptureTitle.Text = state.capturing ? "正在抓取" : captured ? "抓取完成" : "准备获取";
                 CaptureBadge.Text = state.capturing ? "监听中" : captured ? "已获取" : "待开始";
@@ -239,9 +240,9 @@ namespace LynkSignTokenHelper
                 CertificateStatus.ToolTip = state.trusted ? "证书已安装到当前 Windows 用户的受信任根证书存储区" : "安装抓包证书后即可开始抓取";
                 InstallButton.Visibility = Show(!state.trusted);
                 InstallButton.IsEnabled = alive && !busy && !state.capturing;
-                CaptureGuide.Text = !state.trusted ? "安装证书并登录电脑微信，再开始抓取并点击打开小程序。" : state.capturing ? "点击打开小程序；未获取到凭据时，登录或退出账号后重新登录。" : captured ? "Token 已保留在右侧，可复制备用；重新抓取可更新凭据。" : "先登录电脑微信，开始抓取后点击打开领克小程序。";
-                ResultHint.Visibility = Show(!captured || state.capturing);
-                ResultHint.Text = state.capturing ? "抓到凭据后会自动提交" : "获取后自动提交到服务器";
+                CaptureGuide.Text = !state.trusted ? "安装证书并登录电脑微信，再开始抓取并点击打开小程序。" : state.capturing ? "点击打开小程序；未获取到凭据时，登录或退出账号后重新登录。" : captured ? "可在抓取结果中复制 Token；重新抓取可更新凭据。" : "先登录电脑微信，开始抓取后点击打开领克小程序。";
+                ResultHint.Visibility = Show(state.local_only || !captured || state.capturing);
+                ResultHint.Text = state.local_only ? "凭据仅保留在本机内存中，可复制使用" : state.capturing ? "抓到凭据后会自动提交" : "获取后自动提交到服务器";
                 string signature = string.Join("\n", values.Select(value => value.id + "|" + value.device_id + "|" + value.source));
                 if (signature != candidateSignature)
                 {
@@ -255,21 +256,20 @@ namespace LynkSignTokenHelper
                 TokenSource.Text = captured && snapshot.selected < values.Length ? values[snapshot.selected].source : "";
                 if (Token.Text != (snapshot.token ?? "")) Token.Text = snapshot.token ?? "";
                 TokenPlaceholder.Visibility = Show(!captured);
-                Device.Text = snapshot.device_id ?? (captured ? "未获取，使用服务器已有设备 ID" : "尚未获取");
-                if (Device.Text.Length == 0) Device.Text = captured ? "未获取，使用服务器已有设备 ID" : "尚未获取";
+                Device.Text = !string.IsNullOrEmpty(snapshot.device_id) ? snapshot.device_id : !captured ? "尚未获取" : state.local_only ? "未获取" : "未获取，使用服务器已有设备 ID";
                 CopyTokenButton.IsEnabled = captured && !closeRequested;
                 CopyDeviceButton.IsEnabled = !string.IsNullOrEmpty(snapshot.device_id) && !closeRequested;
                 RenderNotice(state, captured, saved, busy, values.Length);
-                Confirmation.Visibility = Show(state.confirmation_required && !closeRequested);
+                Confirmation.Visibility = Show(!state.local_only && state.confirmation_required && !closeRequested);
                 NewAccount.Text = state.account?.display_name ?? "领克账号";
                 NewAccountId.Text = state.account?.id ?? "";
                 OldAccountId.Text = state.previous_account_id ?? "未知";
                 ConfirmButton.IsEnabled = CancelButton.IsEnabled = alive && !busy;
-                SubmitActions.Visibility = Show(!state.confirmation_required);
-                SubmitButton.IsEnabled = alive && !busy && captured && !state.capturing && !saved;
+                SubmitActions.Visibility = Show(!state.local_only && !state.confirmation_required);
+                SubmitButton.IsEnabled = !state.local_only && alive && !busy && captured && !state.capturing && !saved;
                 SubmitButton.Content = saved ? "已保存到服务器" : (state.submission == "failed" && snapshot.selected == state.selected_candidate) || state.submission == "cancelled" ? "重新提交" : state.submission == "submitting" ? "正在提交…" : "提交服务器";
                 BackupHint.Visibility = Show(captured);
-                BackupHint.Text = saved ? "本次抓取的 Token 仍保留在界面中，可复制备用。" : "提交失败时，可复制 Token 手动填写。";
+                BackupHint.Text = state.local_only ? "点击“复制 Token”即可使用；关闭工具后不保留凭据。" : saved ? "本次抓取的 Token 仍保留在界面中，可复制备用。" : "提交失败时，可复制 Token 手动填写。";
                 ProxyState.Text = state.capturing ? "系统代理正在使用" : "代理已恢复";
                 ProxyDot.Fill = Brush(state.capturing ? "#85BAFF" : "#98D4B1");
                 RestoreButton.IsEnabled = alive && !busy;
@@ -283,7 +283,7 @@ namespace LynkSignTokenHelper
             string title = state.trusted ? "可以开始抓取" : "先安装抓包证书";
             string body = state.trusted ? "先打开并登录电脑微信，再点击左侧开始抓取和打开领克小程序。" : "点击左侧证书旁的“安装”，完成后即可开始抓取。";
             string kind = "", icon = state.trusted ? "key" : "shield_checkmark";
-            if (captured) { title = "凭据已获取"; body = count > 1 ? "选择对应的凭据后提交。" : state.message; icon = "checkmark_circle"; }
+            if (captured) { title = "凭据已获取"; body = state.local_only ? count > 1 ? "选择对应的凭据后复制，仅在本地保留，不会上传。" : "凭据仅在本地保留，可复制使用，不会上传。" : count > 1 ? "选择对应的凭据后提交。" : state.message; icon = "checkmark_circle"; }
             if (state.capturing) { title = "正在等待新的登录凭据"; body = state.message; icon = "arrow_sync"; }
             if (state.submission == "failed" && snapshot.selected == state.selected_candidate) { title = "提交失败，Token 已保留"; body = state.message; kind = "warning"; icon = "dismiss_circle"; }
             if (saved) { title = "已保存到服务器"; body = (state.account?.display_name ?? "领克账号") + " · " + state.account?.id; kind = "success"; icon = "checkmark_circle"; }
@@ -303,13 +303,14 @@ namespace LynkSignTokenHelper
         private void UpdateLoginButton()
         {
             if (LoginButton == null || Address == null || Username == null || Password == null) return;
+            if (LocalCaptureButton != null) LocalCaptureButton.IsEnabled = ready && alive && !Busy;
             if (BrowserLoginButton != null) BrowserLoginButton.IsEnabled = ready && alive && !Busy && !string.IsNullOrWhiteSpace(Address.Text);
             LoginButton.IsEnabled = ready && alive && !Busy && !string.IsNullOrWhiteSpace(Address.Text) && !string.IsNullOrWhiteSpace(Username.Text) && Password.Password.Length > 0;
         }
         private void Send(string action, object input = null)
         {
             if (!alive || Busy || ImportantOverlay.Visibility == Visibility.Visible) return;
-            if (action == "start" || action == "stop" || action == "restore" || action == "login" || action == "login/browser") CancelMiniProgramReminder();
+            if (action == "start" || action == "stop" || action == "restore" || action == "login" || action == "login/browser" || action == "capture/local") CancelMiniProgramReminder();
             try { lastAction = action; pendingId = client.Command(action, input); Render(); }
             catch (Exception) { ShowToast("窗口连接已断开，请重新打开工具。", false); }
         }
@@ -319,7 +320,7 @@ namespace LynkSignTokenHelper
             miniProgramCaptureGeneration++;
         }
         private bool ShouldPromptForMiniProgramLogin() =>
-            alive && !closeRequested && IsVisible && snapshot?.state.logged_in == true && snapshot.state.capturing &&
+            alive && !closeRequested && IsVisible && (snapshot?.state.logged_in == true || snapshot?.state.local_only == true) && snapshot.state.capturing &&
             snapshot.state.server_address == miniProgramCaptureServer && snapshot.state.captured_at == miniProgramCaptureAt;
         private void ShowImportantNotice(string title, string message, bool warning = true, Action confirmed = null)
         {
@@ -438,6 +439,14 @@ namespace LynkSignTokenHelper
             VisiblePassword.Clear();
             UpdateLoginButton();
         }
+        private void LocalCaptureClicked(object sender, RoutedEventArgs args)
+        {
+            if (!LocalCaptureButton.IsEnabled) return;
+            miniProgramOperation?.Cancel();
+            Send("capture/local");
+            Password.Clear();
+            VisiblePassword.Clear();
+        }
         private void SwitchClicked(object sender, RoutedEventArgs args)
         {
             CancelMiniProgramReminder();
@@ -549,7 +558,7 @@ namespace LynkSignTokenHelper
             args.Handled = true;
             if (snapshot?.state.authorizing == true) CancelBrowserLoginClicked(sender, args);
             else if (snapshot?.state.confirmation_required == true && !Busy) Send("cancel");
-            else if (editLogin && snapshot?.state.logged_in == true) { editLogin = false; Render(); }
+            else if (editLogin && (snapshot?.state.logged_in == true || snapshot?.state.local_only == true)) { editLogin = false; Render(); }
             else Close();
         }
         private static bool SetTopmost(IntPtr handle, bool value) =>

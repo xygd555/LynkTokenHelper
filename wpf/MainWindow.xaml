@@ -68,6 +68,8 @@
             </Grid>
             <TextBlock x:Name="LoginNotice" Foreground="#EDB5B7" FontSize="12" LineHeight="18" VerticalAlignment="Center" Visibility="Hidden" ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}" />
           </Grid>
+          <Button x:Name="LocalCaptureButton" Content="无需登录，仅本地抓包" Height="40" Margin="0,8,0,0" Click="LocalCaptureClicked" IsEnabled="False" AutomationProperties.Name="无需登录，仅本地抓包" />
+          <TextBlock x:Name="LocalCaptureHint" Text="只获取并复制 Token，不上传到服务器" Foreground="{StaticResource MutedBrush}" FontSize="12" LineHeight="18" Margin="0,6,0,0" HorizontalAlignment="Center" />
         </StackPanel>
       </Border>
     </Grid>

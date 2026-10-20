@@ -20,6 +20,7 @@ type appStatus struct {
 	Authorizing          bool            `json:"authorizing"`
 	AuthorizationURL     string          `json:"authorization_url"`
 	LoggedIn             bool            `json:"logged_in"`
+	LocalOnly            bool            `json:"local_only"`
 	Username             string          `json:"username"`
 	ServerAddress        string          `json:"server_address"`
 	Trusted              bool            `json:"trusted"`
@@ -97,7 +98,7 @@ func (a *app) execute(ctx context.Context, action string, input actionInput) err
 	defer func() { a.mu.Lock(); a.status.Busy = false; a.mu.Unlock() }()
 	var err error
 	switch action {
-	case "login", "login/browser":
+	case "login", "login/browser", "capture/local":
 		if err = a.stopCapture(false); err != nil {
 			break
 		}
@@ -105,6 +106,9 @@ func (a *app) execute(ctx context.Context, action string, input actionInput) err
 		previousPanel := a.panel
 		a.panel = nil
 		a.status.LoggedIn = false
+		a.status.LocalOnly = action == "capture/local"
+		a.status.Authorizing = false
+		a.status.AuthorizationURL = ""
 		a.status.Username = ""
 		a.status.ServerAddress = ""
 		a.candidates = nil
@@ -115,7 +119,14 @@ func (a *app) execute(ctx context.Context, action string, input actionInput) err
 		a.status.CapturedAt = time.Time{}
 		a.status.SelectedCandidate = 0
 		a.status.Account = accountInfo{}
+		a.status.PreviousAccountID = ""
+		if a.status.LocalOnly {
+			a.status.Message = "已进入仅本地抓包模式，获取的凭据仅保留在本次工具会话中，不会上传服务器。"
+		}
 		a.mu.Unlock()
+		if action == "capture/local" {
+			break
+		}
 		previousPanel.revokeHelperSession()
 		settings, readErr := readProxy()
 		if readErr != nil {
@@ -186,6 +197,10 @@ func (a *app) execute(ctx context.Context, action string, input actionInput) err
 			a.mu.Unlock()
 		}
 	case "submit":
+		if a.currentStatus().LocalOnly {
+			err = fmt.Errorf("本地抓包模式不会上传凭据，请复制后自行使用")
+			break
+		}
 		index, parseErr := strconv.Atoi(input.ID)
 		a.mu.Lock()
 		var value credential
@@ -200,6 +215,10 @@ func (a *app) execute(ctx context.Context, action string, input actionInput) err
 		}
 		err = a.submit(ctx, map[string]string{"refresh_token": value.Token, "device_id": value.DeviceID})
 	case "confirm":
+		if a.currentStatus().LocalOnly {
+			err = fmt.Errorf("本地抓包模式不会上传凭据，请复制后自行使用")
+			break
+		}
 		a.mu.Lock()
 		id := a.confirmationID
 		a.mu.Unlock()
@@ -255,9 +274,9 @@ func (a *app) startCapture() error {
 		return err
 	}
 	a.mu.Lock()
-	loggedIn := a.panel != nil
+	canCapture := a.panel != nil || a.status.LocalOnly
 	a.mu.Unlock()
-	if !loggedIn {
+	if !canCapture {
 		return fmt.Errorf("请先登录服务器")
 	}
 	if !certificateTrusted(a.ca) {
@@ -383,6 +402,14 @@ func (a *app) receive(generation int, values []credential) {
 	for index, value := range values {
 		a.status.Candidates = append(a.status.Candidates, candidateView{strconv.Itoa(index), value.DeviceID, value.Source})
 	}
+	if a.status.LocalOnly {
+		a.status.Message = "已获取凭据，仅保留在本次工具会话中，请复制后自行使用。"
+		if len(values) > 1 {
+			a.status.Message = "捕获到多个候选凭据，请选择并复制；凭据仅保留在本次工具会话中。"
+		}
+		a.mu.Unlock()
+		return
+	}
 	a.status.Message = "已捕获凭据，正在提交服务器验证。"
 	a.mu.Unlock()
 	if len(values) == 1 {
@@ -402,6 +429,10 @@ func (a *app) receive(generation int, values []credential) {
 
 func (a *app) submit(ctx context.Context, input any) (err error) {
 	a.mu.Lock()
+	if a.status.LocalOnly {
+		a.mu.Unlock()
+		return fmt.Errorf("本地抓包模式不会上传凭据，请复制后自行使用")
+	}
 	panel := a.panel
 	a.status.Busy = true
 	a.status.Submission = "submitting"

@@ -67,6 +67,8 @@ internal static partial class WpfTests
                         MiniProgramLoginReminder();
                         ImportantNoticeWorkflow();
                         }
+                        LocalCaptureWorkflow();
+                        ActualLocalCorePipe();
                         LoginLayout();
                         NativeWorkflow();
                         SmallWorkArea();
@@ -172,7 +174,7 @@ internal static partial class WpfTests
     private static void CheckLoginFits(MainWindow window)
     {
         var root = Control<Grid>(window, "Root");
-        foreach (string name in new[] { "LoginCardHost", "Address", "Username", "Password", "LoginButton", "LoginNotice", "BackButton", "BrowserLoginButton", "LoginActions", "LoginUpdateButton", "BrowserLoginActions" })
+        foreach (string name in new[] { "LoginCardHost", "Address", "Username", "Password", "LoginButton", "LoginNotice", "BackButton", "BrowserLoginButton", "LoginActions", "LoginUpdateButton", "BrowserLoginActions", "LocalCaptureButton", "LocalCaptureHint" })
         {
             if (!Control<FrameworkElement>(window, name).IsVisible) continue;
             Rect bounds = Bounds(window, name);
@@ -285,6 +287,80 @@ internal static partial class WpfTests
             }
             window.Close(); Until(() => !window.IsVisible);
         }
+    }
+    private static void LocalCaptureWorkflow()
+    {
+        foreach (Rect area in new[] { new Rect(0, 0, 1400, 1000), new Rect(0, 0, 720, 600) })
+        {
+            var core = new FakeCore();
+            var window = new MainWindow(core, workArea: () => area);
+            string copied = null;
+            window.CopyText = value => copied = value;
+            window.Show();
+            Until(() => core.Started);
+            core.Emit(); Pump();
+            Control<TextBox>(window, "Address").Clear();
+            Check(Control<Button>(window, "LocalCaptureButton").IsEnabled, "local capture requires a server address");
+            CheckLoginFits(window);
+            Capture(window, area.Width == 1400 ? "wpf-local-entry-100" : "wpf-local-entry-small-100");
+            Click(window, "LocalCaptureButton");
+            Until(() => Control<FrameworkElement>(window, "MainView").IsVisible);
+            Check(!core.Snapshot.state.logged_in && core.Snapshot.state.local_only, "local capture logged in to a panel");
+            Check(Text(window, "ServerAddress").Contains("仅本地"), "local mode is not labelled");
+            Check(!Control<FrameworkElement>(window, "SubmitActions").IsVisible && !Control<Button>(window, "SubmitButton").IsEnabled, "local mode permits upload");
+            Click(window, "InstallButton");
+            Click(window, "StartButton");
+            Check(core.Snapshot.state.capturing && !Text(window, "ResultHint").Contains("提交"), "local listening shows automatic upload");
+            core.Capture(); Pump();
+            Click(window, "CopyTokenButton");
+            Check(copied == "rt_first_synthetic", "local token cannot be copied");
+            Control<ComboBox>(window, "Candidates").SelectedIndex = 1; Pump();
+            Click(window, "CopyTokenButton");
+            Check(copied == core.LongToken, "local candidate selection did not update copied token");
+            core.Snapshot.device_id = null; core.Emit(); Pump();
+            Check(Text(window, "ResultHint").Contains("本机") && Control<TextBox>(window, "Device").Text == "未获取", "local result mentions server device fallback");
+            var scroll = Control<ScrollViewer>(window, "MainView");
+            scroll.ScrollToTop(); Pump();
+            Capture(window, area.Width == 1400 ? "wpf-local-result-100" : "wpf-local-result-small-100");
+            if (area.Width == 720)
+            {
+                Control<FrameworkElement>(window, "ResultPanel").BringIntoView(); Pump();
+                Capture(window, "wpf-local-result-small-scrolled-100");
+                scroll.ScrollToTop(); Pump();
+            }
+            Click(window, "SwitchButton");
+            Check(Control<FrameworkElement>(window, "LoginView").IsVisible, "local mode cannot open server login");
+            Check(!Control<FrameworkElement>(window, "LoginNotice").IsVisible, "local mode description rendered as login error");
+            Click(window, "BackButton");
+            Check(Control<FrameworkElement>(window, "MainView").IsVisible && Control<TextBox>(window, "Token").Text == core.LongToken, "back discarded local credentials");
+            Click(window, "SwitchButton");
+            PressKey(window, Key.Escape); Pump();
+            Check(window.IsVisible && Control<FrameworkElement>(window, "MainView").IsVisible, "Escape closed local workbench instead of returning");
+            Check(!core.Commands.Any(action => action == "submit" || action == "confirm" || action.StartsWith("login")), "local workflow contacted panel");
+            window.Close(); Until(() => !window.IsVisible);
+        }
+    }
+    private static void ActualLocalCorePipe()
+    {
+        string directory = Path.Combine(output, "local-state-" + Guid.NewGuid().ToString("N"));
+        var client = new CoreClient(directory);
+        CoreSnapshot snapshot = null;
+        string failure = null;
+        bool closed = false;
+        client.Updated += value => Volatile.Write(ref snapshot, value);
+        client.Faulted += value => Volatile.Write(ref failure, value);
+        client.Closed += () => Volatile.Write(ref closed, true);
+        try
+        {
+            client.Start();
+            Until(() => Volatile.Read(ref snapshot) != null || Volatile.Read(ref failure) != null);
+            Check(failure == null, "local pipe startup failed");
+            client.Command("capture/local");
+            Until(() => Volatile.Read(ref snapshot).state.local_only || Volatile.Read(ref failure) != null);
+            Check(failure == null && !snapshot.state.logged_in && string.IsNullOrEmpty(snapshot.state.server_address), "local core pipe requires login");
+            client.Close(); Until(() => Volatile.Read(ref closed));
+        }
+        finally { client.Dispose(); }
     }
     private static void LoginLayout()
     {
@@ -711,7 +787,7 @@ internal static partial class WpfTests
     }
     private static void MiniProgramLoginReminder()
     {
-        foreach (string scenario in new[] { "missing", "old-token", "captured", "captured-during-open", "stopped-during-open", "restarted-during-open", "stopped", "restarted", "server", "not-capturing" })
+        foreach (string scenario in new[] { "missing", "local", "old-token", "captured", "captured-during-open", "stopped-during-open", "restarted-during-open", "stopped", "restarted", "server", "not-capturing" })
         {
             var core = new FakeCore();
             var launcher = new FakeMiniProgramLauncher();
@@ -720,6 +796,7 @@ internal static partial class WpfTests
             Until(() => core.Started);
             core.Snapshot.state.logged_in = core.Snapshot.state.trusted = true;
             core.Snapshot.state.server_address = "https://sign.example.com";
+            if (scenario == "local") { core.Snapshot.state.logged_in = false; core.Snapshot.state.local_only = true; core.Snapshot.state.server_address = null; }
             core.Snapshot.state.capturing = scenario != "not-capturing";
             if (scenario == "old-token") { core.Snapshot.token = "rt_previous_synthetic"; core.Snapshot.state.captured_at = "2026-10-15T09:00:00+08:00"; }
             core.Emit();
@@ -742,10 +819,15 @@ internal static partial class WpfTests
                 if (scenario == "restarted") { Click(window, "StartButton"); Until(() => Control<Button>(window, "StopButton").Visibility == Visibility.Visible); }
             }
             if (scenario == "server") { core.Snapshot.state.server_address = "https://other.example.com"; core.Emit(); Pump(); }
-            bool expected = scenario == "missing" || scenario == "old-token" || scenario == "not-capturing";
+            bool expected = scenario == "missing" || scenario == "local" || scenario == "old-token" || scenario == "not-capturing";
             if (expected)
             {
                 CheckImportantNotice(window, scenario == "not-capturing" ? "尚未开始抓取" : "退出账号后重新登录");
+                if (scenario == "local")
+                {
+                    Check(Text(window, "ImportantBody").Contains("不会上传") && !Text(window, "ImportantBody").Contains("自动提交"), "local reminder promises upload");
+                    Capture(window, "wpf-local-reminder-100");
+                }
                 if (scenario == "missing")
                 {
                     Capture(window, "wpf-login-reminder-100");
@@ -889,6 +971,7 @@ internal static partial class WpfTests
         public event Action<string> Faulted;
         public event Action Closed;
         public bool Started, Disposed, FailFirstClose;
+        public readonly List<string> Commands = new List<string>();
         public string LongToken = "rt_synthetic_" + string.Concat(Enumerable.Repeat("a1b2c3d4",32));
         public CoreSnapshot Snapshot = new CoreSnapshot { type = "snapshot", protocol = 1, state = new AppState { message = "请先登录服务器" } };
         private long sequence;
@@ -898,16 +981,23 @@ internal static partial class WpfTests
         public void Emit() { Updated?.Invoke(new JavaScriptSerializer().Deserialize<CoreSnapshot>(new JavaScriptSerializer().Serialize(Snapshot))); }
         public long Command(string action, object input = null)
         {
+            Commands.Add(action);
             Snapshot.request_id = ++sequence;
             Snapshot.error = null;
             switch (action)
             {
+                case "capture/local":
+                    Snapshot.state = new AppState { local_only = true, message = "仅本地抓包，凭据不会上传。" };
+                    Snapshot.token = Snapshot.device_id = null;
+                    break;
                 case "login":
+                    Snapshot.state.local_only = false;
                     var values = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(new JavaScriptSerializer().Serialize(input));
                     Check((string)values["Username"] == "测试用户" && (string)values["Password"] == "synthetic-password", "native login input changed");
                     Snapshot.state.logged_in = true; Snapshot.state.username = "周末去看海"; Snapshot.state.server_address = "https://sign.example.com"; Snapshot.state.message = "服务器登录成功"; Snapshot.token = null; Snapshot.state.candidates = null; Snapshot.state.submission = null; Snapshot.state.confirmation_required = false;
                     break;
                 case "login/browser":
+                    Snapshot.state.local_only = false;
                     var browserInput = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(new JavaScriptSerializer().Serialize(input));
                     Check(!browserInput.ContainsKey("Password") && !browserInput.ContainsKey("Username"), "browser login sent account credentials");
                     Snapshot.state.logged_in = false; Snapshot.pending = Snapshot.state.busy = Snapshot.state.authorizing = true;

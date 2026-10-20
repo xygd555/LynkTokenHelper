@@ -141,7 +141,7 @@ func runCore(app *app, input io.Reader, output io.Writer) error {
 					}
 				case "command":
 					switch request.Action {
-					case "login", "login/browser", "certificate/install", "certificate/remove", "start", "stop", "restore", "submit", "confirm", "cancel":
+					case "login", "login/browser", "capture/local", "certificate/install", "certificate/remove", "start", "stop", "restore", "submit", "confirm", "cancel":
 						state := app.currentStatus()
 						if (request.Action == "submit" && (state.Capturing || state.ConfirmationRequired)) || (request.Action == "start" && state.ConfirmationRequired) {
 							break
