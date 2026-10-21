@@ -36,7 +36,8 @@ internal static partial class WpfTests
         {
             try
             {
-                if (args.Length > 0 && args[0] == "--updates")
+                if (args.Length > 0 && args[0] == "--scan-runtime") ActualRuntimeScan(args.Skip(1).ToArray());
+                else if (args.Length > 0 && args[0] == "--updates")
                 {
                     output = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "wpf-native"));
                     Directory.CreateDirectory(output);

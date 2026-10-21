@@ -17,16 +17,10 @@ namespace LynkSignTokenHelper
         public long UiTaskRunner;
         public int ServerState;
         public bool Initialized;
+        public WeChatRuntimeLayout Layout;
     }
 
     internal static class WeChatRuntimeBridge {
-        const long ManagerRva = 0xdb85368;
-        const long ExecutorRva = 0xdbd2800;
-        const long SetterRva = 0x26a38a0;
-        const long UiRunnerRva = 0x527fd30;
-        const long ReleaseRva = 0x4ac0b40;
-        const long QueryRva = 0x3c7d810;
-        const long GuardRva = 0xda2e608;
         const uint WaitObject = 0;
 #if WECHAT_LAUNCH_UNCHECKED
         internal static readonly bool CompatibilityChecksEnabled = false;
@@ -73,9 +67,10 @@ namespace LynkSignTokenHelper
         static long Pointer(IntPtr process, long address) { return BitConverter.ToInt64(Read(process, address, 8), 0); }
         static void Put64(byte[] bytes, int offset, long value) { Buffer.BlockCopy(BitConverter.GetBytes(value), 0, bytes, offset, 8); }
         static void Put32(byte[] bytes, int offset, int value) { Buffer.BlockCopy(BitConverter.GetBytes(value), 0, bytes, offset, 4); }
-        static void VerifyCode(IntPtr process, long moduleBase, long rva, string expected) {
-            byte[] bytes = Hex(expected);
-            if (!Read(process, moduleBase + rva, bytes.Length).SequenceEqual(bytes)) throw new InvalidOperationException("当前微信运行环境不匹配，已停止打开小程序");
+        static void VerifyLayout(IntPtr process, long moduleBase, WeChatRuntimeLayout layout) {
+            foreach (RuntimeCodeSignature signature in layout.Signatures)
+                if (!signature.Pattern.Matches(Read(process, moduleBase + signature.Rva, signature.Pattern.Bytes.Length), 0))
+                    throw WeChatRuntimeScanner.Unsupported("加载中的运行时代码与扫描文件不一致");
         }
         public static byte[] Hex(string text) {
             text = text.Replace(" ", "");
@@ -89,43 +84,40 @@ namespace LynkSignTokenHelper
                 try {
                     ProcessModule module = process.Modules.Cast<ProcessModule>().FirstOrDefault(m => string.Equals(m.ModuleName, "flue.dll", StringComparison.OrdinalIgnoreCase));
                     if (module == null) continue;
-                    if (CompatibilityChecksEnabled && module.ModuleMemorySize < ExecutorRva + 8) throw new InvalidOperationException("当前微信运行环境不匹配，已停止打开小程序。");
+                    WeChatRuntimeLayout layout = WeChatRuntimeScanner.Resolve(module.FileName);
+                    if (module.ModuleMemorySize < layout.ImageSize) throw WeChatRuntimeScanner.Unsupported("加载模块范围不完整");
                     handle = OpenProcess(0x410, false, process.Id);
                     Check(handle != IntPtr.Zero, "读取候选小程序进程失败");
                     long moduleBase = module.BaseAddress.ToInt64();
-                    // The opt-in test build skips layout checks and retains the existing offsets.
-                    if (CompatibilityChecksEnabled) {
-                        VerifyCode(handle, moduleBase, SetterRva, "41 57 41 56 41 55 41 54 56 57 55 53 48 81 ec 98 01 00 00");
-                        VerifyCode(handle, moduleBase, UiRunnerRva, "56 57 53 48 83 ec 20 48 89 d7 48 89 ce");
-                        VerifyCode(handle, moduleBase, QueryRva, "89 d0 c3");
-                    }
-                    long executor = Pointer(handle, moduleBase + ExecutorRva);
-                    long manager = moduleBase + ManagerRva;
-                    if (executor == 0 || (CompatibilityChecksEnabled && Pointer(handle, manager) != moduleBase + 0xbe09c38)) continue;
-                    bool initialized = Read(handle, manager + 0x18, 1)[0] == 1;
+                    if (CompatibilityChecksEnabled) VerifyLayout(handle, moduleBase, layout);
+                    long executor = Pointer(handle, moduleBase + layout.ExecutorRva);
+                    long manager = moduleBase + layout.ManagerRva;
+                    if (executor == 0 || (CompatibilityChecksEnabled && Pointer(handle, manager) != moduleBase + layout.ManagerVtableRva)) continue;
+                    bool initialized = Read(handle, moduleBase + layout.InitializedRva, 1)[0] == 1;
                     if (CompatibilityChecksEnabled && !initialized) continue;
-                    long queues = Pointer(handle, executor + 8);
-                    long runner = queues == 0 ? 0 : Pointer(handle, queues + 0x28);
-                    int state = BitConverter.ToInt32(Read(handle, manager + 0xe4, 4), 0);
-                    if (runner == 0) throw new InvalidOperationException("UI 任务队列尚未准备好");
-                    found.Add(new WeChatRuntimeTarget { ProcessId=process.Id, ModuleBase=moduleBase, ModulePath=module.FileName, Manager=manager, UiTaskRunner=runner, ServerState=state, Initialized=initialized });
+                    long queues = Pointer(handle, executor + layout.QueueOffset);
+                    long runner = queues == 0 ? 0 : Pointer(handle, queues + layout.RunnerOffset);
+                    int state = BitConverter.ToInt32(Read(handle, manager + layout.StateOffset, 4), 0);
+                    if (runner == 0) throw new InvalidOperationException("微信的小程序 UI 任务队列尚未准备好，请稍候重试。");
+                    if (state < 0 || state > 3) throw WeChatRuntimeScanner.Unsupported("启动服务状态无效");
+                    found.Add(new WeChatRuntimeTarget { ProcessId=process.Id, ModuleBase=moduleBase, ModulePath=module.FileName, Manager=manager, UiTaskRunner=runner, ServerState=state, Initialized=initialized, Layout=layout });
                 } catch (InvalidOperationException) { throw; }
-                catch (Win32Exception) { throw; }
+                catch (Win32Exception error) { throw new InvalidOperationException("读取微信启动状态失败（系统错误 " + error.NativeErrorCode + "）：" + error.Message + "。", error); }
                 finally { if (handle != IntPtr.Zero) CloseHandle(handle); process.Dispose(); }
             }
             return found.ToArray();
         }
 
-        // Version-specific Chromium task ABI. The starter only posts; Invoke runs on CrBrowserMain.
+        // Recognized Chromium task ABI. Addresses and object fields come from the scanned image.
         // Destroy tail-calls SetEvent so the callback page is no longer executing when released.
-        static byte[] BuildCode() {
+        internal static byte[] BuildCode(int refcountOffset) {
             var code = Enumerable.Repeat((byte)0xcc, 0x220).ToArray();
             byte[] starter = Hex(
                 "48 83 ec 58 48 89 4c 24 40 49 89 ca 48 8d 4c 24 20 " +
                 "49 8b 52 48 41 ff 52 30 48 8b 4c 24 20 48 89 4c 24 48 " +
                 "4c 8b 54 24 40 49 8b 52 50 4d 8b 42 58 45 31 c9 " +
                 "48 8b 01 48 8b 00 4d 8b 5a 40 41 ff 13 " +
-                "4c 8b 54 24 40 41 88 42 28 48 8b 4c 24 48 f0 ff 49 08 " +
+                "4c 8b 54 24 40 41 88 42 28 48 8b 4c 24 48 f0 ff 49 " + refcountOffset.ToString("x2") + " " +
                 "75 09 4c 8b 54 24 40 41 ff 52 38 31 c0 48 83 c4 58 c3");
             byte[] invoke = Hex(
                 "48 83 ec 28 48 8b 49 20 48 89 4c 24 20 49 89 ca " +
@@ -136,6 +128,7 @@ namespace LynkSignTokenHelper
             Buffer.BlockCopy(starter, 0, code, 0, starter.Length);
             Buffer.BlockCopy(invoke, 0, code, 0x100, invoke.Length);
             Buffer.BlockCopy(destroy, 0, code, 0x200, destroy.Length);
+            Buffer.BlockCopy(Hex("89 d0 c3"), 0, code, 0x210, 3);
             return code;
         }
 
@@ -163,13 +156,14 @@ namespace LynkSignTokenHelper
                 executable = VirtualAllocEx(process, IntPtr.Zero, (UIntPtr)4096, 0x3000, 0x04);
                 Check(memory != IntPtr.Zero && executable != IntPtr.Zero, "分配启动临时页失败");
                 long data = memory.ToInt64(), codeAddress = executable.ToInt64(), moduleBase = target.ModuleBase;
+                WeChatRuntimeLayout layout = target.Layout;
                 var bytes = new byte[4096];
                 // Control: manager, setter, string*, completion*, desired (-1 probes), status, runner getter.
                 // BindStateBase: refcount, Invoke, Destroy, query callback, control*, event, SetEvent.
-                Put64(bytes, 0, target.Manager); Put64(bytes, 8, moduleBase + SetterRva);
+                Put64(bytes, 0, target.Manager); Put64(bytes, 8, moduleBase + layout.SetterRva);
                 Put64(bytes, 0x10, data + 0x160); Put64(bytes, 0x18, data + 0x1c0); Put32(bytes, 0x20, desired);
-                Put64(bytes, 0x30, moduleBase + UiRunnerRva); Put64(bytes, 0x38, moduleBase + ReleaseRva);
-                Put64(bytes, 0x40, moduleBase + GuardRva); Put64(bytes, 0x48, data + 0x100);
+                Put64(bytes, 0x30, moduleBase + layout.UiRunnerRva); Put64(bytes, 0x38, moduleBase + layout.ReleaseRva);
+                Put64(bytes, 0x40, moduleBase + layout.GuardRva); Put64(bytes, 0x48, data + 0x100);
                 Put64(bytes, 0x50, data + 0x120); Put64(bytes, 0x58, data + 0x1e0);
                 Put64(bytes, 0x120, data + 0x300); Put64(bytes, 0x128, data + 0x320);
                 Put32(bytes, 0x130, 1); Put64(bytes, 0x138, codeAddress + 0x100);
@@ -179,7 +173,7 @@ namespace LynkSignTokenHelper
                 Buffer.BlockCopy(key, 0, bytes, 0x180, key.Length);
                 Put64(bytes, 0x1e0, data + 0x200);
                 Put32(bytes, 0x200, 1); Put64(bytes, 0x208, codeAddress + 0x100);
-                Put64(bytes, 0x210, codeAddress + 0x200); Put64(bytes, 0x218, moduleBase + QueryRva);
+                Put64(bytes, 0x210, codeAddress + 0x200); Put64(bytes, 0x218, codeAddress + 0x210);
                 Put64(bytes, 0x220, data); Put64(bytes, 0x228, remoteCompletion.ToInt64());
                 IntPtr localModule = GetModuleHandle("kernelbase.dll");
                 long localSetEvent = GetProcAddress(localModule, "SetEvent").ToInt64();
@@ -195,7 +189,7 @@ namespace LynkSignTokenHelper
                 Buffer.BlockCopy(name, 0, bytes, 0x300, name.Length); Buffer.BlockCopy(name, 0, bytes, 0x320, name.Length);
                 UIntPtr written;
                 Check(WriteProcessMemory(process, memory, bytes, (UIntPtr)bytes.Length, out written) && written.ToUInt64() == (ulong)bytes.Length, "写入启动参数失败");
-                byte[] code = BuildCode();
+                byte[] code = BuildCode(layout.RunnerRefcountOffset);
                 Check(WriteProcessMemory(process, executable, code, (UIntPtr)code.Length, out written) && written.ToUInt64() == (ulong)code.Length, "写入启动回调失败");
                 uint previous;
                 Check(VirtualProtectEx(process, executable, (UIntPtr)4096, 0x20, out previous), "设置启动回调执行权限失败");

@@ -28,6 +28,7 @@ internal static partial class WpfTests
 
     private static void RuntimeWorkflow()
     {
+        RuntimeScannerTests();
         var desktop = new FakeMiniProgramDesktop();
         var runtime = new FakeMiniProgramRuntime { Desktop = desktop };
         var launcher = new LynkMiniProgramLauncher(desktop, runtime: runtime);

@@ -45,6 +45,7 @@
     <Compile Include="LynkMiniProgramLauncher.cs" />
     <Compile Include="WeChatMiniProgramRuntime.cs" />
     <Compile Include="WeChatRuntimeBridge.cs" />
+    <Compile Include="WeChatRuntimeScanner.cs" />
     <Compile Include="MainWindow.xaml.cs">
       <DependentUpon>MainWindow.xaml</DependentUpon>
     </Compile>

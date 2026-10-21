@@ -37,6 +37,7 @@
     <Compile Include="UpdateTests.cs" />
     <Compile Include="UpdateMirrorTests.cs" />
     <Compile Include="RuntimeTests.cs" />
+    <Compile Include="RuntimeScannerTests.cs" />
   </ItemGroup>
   <Import Project="$(MSBuildBinPath)\Microsoft.CSharp.targets" />
 </Project>
