@@ -37,6 +37,12 @@ internal static partial class WpfTests
             try
             {
                 if (args.Length > 0 && args[0] == "--scan-runtime") ActualRuntimeScan(args.Skip(1).ToArray());
+                else if (args.Length > 0 && args[0] == "--core-cache")
+                {
+                    output = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "wpf-core-cache"));
+                    Directory.CreateDirectory(output);
+                    CoreCacheWorkflow();
+                }
                 else if (args.Length > 0 && args[0] == "--updates")
                 {
                     output = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "wpf-native"));
@@ -84,6 +90,7 @@ internal static partial class WpfTests
                         FatalPreservesBackup();
                         ActualCorePipe();
                         ActualCoreDisconnect();
+                        CoreCacheWorkflow();
                         Console.WriteLine("WPF 第 " + pass + " 次原生交互与布局验证通过。");
                     }
                     if (interactive) ActualMiniProgram();

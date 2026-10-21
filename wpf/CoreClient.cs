@@ -5,6 +5,7 @@ using System.IO.Compression;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Web.Script.Serialization;
@@ -91,23 +92,27 @@ namespace LynkSignTokenHelper
                 }
             });
         }
-        private string ExtractCore()
+        internal string ExtractCore()
         {
-            byte[] data;
-            using (Stream resource = Assembly.GetExecutingAssembly().GetManifestResourceStream("LynkSignTokenHelper.Core.exe.gz"))
-            using (var compressed = new GZipStream(resource, CompressionMode.Decompress))
-            using (var bytes = new MemoryStream()) { compressed.CopyTo(bytes); data = bytes.ToArray(); }
-            string hash;
-            using (var sha = SHA256.Create()) hash = BitConverter.ToString(sha.ComputeHash(data)).Replace("-", "").ToLowerInvariant();
+            string hash = BuildInfo.CoreSha256;
             string cache = Path.Combine(directory, "runtime");
             Directory.CreateDirectory(cache);
             string executable = Path.Combine(cache, "core-" + hash.Substring(0, 16) + ".exe");
             if (File.Exists(executable))
             {
+                bool valid;
                 using (var sha = SHA256.Create())
                 using (var file = File.OpenRead(executable))
-                    if (BitConverter.ToString(sha.ComputeHash(file)).Replace("-", "").ToLowerInvariant() == hash) return executable;
+                    valid = BitConverter.ToString(sha.ComputeHash(file)).Replace("-", "").ToLowerInvariant() == hash;
+                if (valid) { CleanCoreCache(cache, executable); return executable; }
             }
+            byte[] data;
+            using (Stream resource = Assembly.GetExecutingAssembly().GetManifestResourceStream("LynkSignTokenHelper.Core.exe.gz"))
+            using (var compressed = new GZipStream(resource, CompressionMode.Decompress))
+            using (var bytes = new MemoryStream()) { compressed.CopyTo(bytes); data = bytes.ToArray(); }
+            using (var sha = SHA256.Create())
+                if (BitConverter.ToString(sha.ComputeHash(data)).Replace("-", "").ToLowerInvariant() != hash)
+                    throw new InvalidDataException("内嵌抓包内核校验失败。");
             string temporary = executable + "." + Guid.NewGuid().ToString("N") + ".tmp";
             try
             {
@@ -116,7 +121,25 @@ namespace LynkSignTokenHelper
                 File.Move(temporary, executable);
             }
             finally { if (File.Exists(temporary)) File.Delete(temporary); }
+            CleanCoreCache(cache, executable);
             return executable;
+        }
+        private static void CleanCoreCache(string cache, string current)
+        {
+            try
+            {
+                foreach (string file in Directory.EnumerateFiles(cache, "core-*.exe", SearchOption.TopDirectoryOnly))
+                {
+                    string name = Path.GetFileName(file);
+                    if (string.Equals(name, Path.GetFileName(current), StringComparison.OrdinalIgnoreCase) ||
+                        !Regex.IsMatch(name, @"\Acore-[a-f0-9]{16}\.exe\z", RegexOptions.CultureInvariant)) continue;
+                    try { File.Delete(file); }
+                    catch (IOException) { }
+                    catch (UnauthorizedAccessException) { }
+                }
+            }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
         }
         internal static string Quote(string value)
         {

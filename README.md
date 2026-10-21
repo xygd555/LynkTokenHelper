@@ -71,7 +71,7 @@ LYNK_HELPER_REPOSITORY=https://github.com/xygd555/LynkTokenHelper
 - 支持直连和常见 HTTP 手动上游代理。PAC、仅 SOCKS 上游代理、HTTP 与 HTTPS 分别使用不同代理暂不支持，会在修改设置前提示。
 - 微信是否使用系统代理、是否信任当前用户证书，需要在具体版本中实测。获取等待时间为 10 分钟；连接计数不代表已获得有效凭据。
 - 工具不保存密码、面板会话、领克 Token 或完整抓包文件。本次凭据只在内存中保留，复制内容由 Windows 剪贴板管理。
-- 证书、代理恢复信息及内嵌内核缓存统一保存在 `%LOCALAPPDATA%\LynkTokenHelper`（通常为 `C:\Users\用户名\AppData\Local\LynkTokenHelper`），不在 EXE 旁生成文件夹。同一 Windows 用户移动或更新 EXE 时复用该目录及证书，无需重复安装；私钥由当前用户的 DPAPI 加密。抓取期间不要移动或删除该目录。开发排查仍可通过 `--data-dir` 指定其他状态目录。
+- 证书、代理恢复信息及内嵌内核缓存统一保存在 `%LOCALAPPDATA%\LynkTokenHelper`（通常为 `C:\Users\用户名\AppData\Local\LynkTokenHelper`），不在 EXE 旁生成文件夹。同一 Windows 用户移动或更新 EXE 时复用该目录及证书，无需重复安装；私钥由当前用户的 DPAPI 加密。抓取期间不要移动或删除该目录。单文件版启动时先校验并复用已有内核，仅在缺失或损坏时解压释放；成功取得当前内核后，自动清理 `runtime` 顶层符合本工具命名的旧 `core-<16位哈希>.exe`。使用中或无法删除的旧内核保留，下次启动重试；不清理证书、配置或其他文件。开发排查仍可通过 `--data-dir` 指定其他状态目录。
 - EXE 内嵌 WPF 界面和 Go 抓包内核，通过匿名管道通信。工具尚未进行代码签名。
 
 ## 本地构建与验证
@@ -89,7 +89,7 @@ LYNK_HELPER_REPOSITORY=https://github.com/xygd555/LynkTokenHelper
 ./build.ps1 -DefaultServer 'https://sign.example.com'
 ```
 
-输出为 `dist/LynkSignTokenHelper-windows-x64.exe` 和同名 ZIP。ZIP 包含 EXE、使用说明及许可证。图标、源码和构建资源全部位于本仓库，**构建不依赖面板源码目录**。
+输出为 `dist/LynkSignTokenHelper-windows-x64.exe` 和同名 ZIP。ZIP 包含 EXE、使用说明及许可证。图标、源码和构建资源全部位于本仓库，**构建不依赖面板源码目录**。内核构建不写入整个仓库的 Git 提交状态；在 Go 源码、依赖、工具链和默认服务器等构建输入不变时，界面或提交信息变化不会改变内核缓存。
 
 `test.ps1` 执行 Go 测试、静态检查和 WPF 交互测试。测试使用虚构凭据、模拟面板及隔离状态目录，不安装证书或启用系统代理。WPF 测试以独立桌面进程启动，会短暂显示模拟界面，需在可交互的 Windows 桌面执行。测试截图输出到 `test-results/wpf-native/`；不同渲染比例截图不等同于多机 DPI 实机验收。
 

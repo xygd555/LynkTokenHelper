@@ -26,12 +26,13 @@ try {
     New-Item -ItemType Directory -Force $env:GOCACHE,$env:GOTMPDIR,'wpf/obj','dist' | Out-Null
     $taskLinkerFlags='-s -w -H=windowsgui'
     if($DefaultServer){$taskLinkerFlags += " -X=main.defaultServer=$DefaultServer"}
-    go build -trimpath -ldflags $taskLinkerFlags -o wpf/obj/Core.exe .
+    go build -trimpath -buildvcs=false -ldflags $taskLinkerFlags -o wpf/obj/Core.exe .
     if($LASTEXITCODE -ne 0){throw '抓包内核构建失败。'}
     $taskInput=[IO.File]::OpenRead((Join-Path $PSScriptRoot 'wpf/obj/Core.exe'))
     $taskOutput=[IO.File]::Create((Join-Path $PSScriptRoot 'wpf/obj/Core.exe.gz'))
     $taskGzip=[IO.Compression.GZipStream]::new($taskOutput,[IO.Compression.CompressionLevel]::Optimal)
     try{$taskInput.CopyTo($taskGzip)}finally{$taskInput.Dispose();$taskGzip.Dispose();$taskOutput.Dispose()}
+    $taskCoreSha256=(Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'wpf/obj/Core.exe') -Algorithm SHA256).Hash.ToLowerInvariant()
     $taskVersionSource=[IO.File]::ReadAllText((Join-Path $PSScriptRoot 'VERSION'))
     $taskVersion=$taskVersionSource.Trim()
     if($taskVersion -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$'){throw 'VERSION 必须为 v1.0.0 格式。'}
@@ -42,7 +43,7 @@ using System.Reflection;
 [assembly: AssemblyProduct("Lynk Sign Token Helper")]
 [assembly: AssemblyVersion("$taskAssemblyVersion")]
 [assembly: AssemblyFileVersion("$taskAssemblyVersion")]
-namespace LynkSignTokenHelper { internal static class BuildInfo { public const string Version = "$taskVersion"; public const string DefaultServer = @"$DefaultServer"; } }
+namespace LynkSignTokenHelper { internal static class BuildInfo { public const string Version = "$taskVersion"; public const string DefaultServer = @"$DefaultServer"; public const string CoreSha256 = "$taskCoreSha256"; } }
 "@
     [IO.File]::WriteAllText((Join-Path $PSScriptRoot 'wpf/obj/BuildInfo.cs'),$taskBuildInfo,[Text.UTF8Encoding]::new($false))
     $taskSkipCompatibility = $SkipMiniProgramCompatibilityChecks.IsPresent.ToString().ToLowerInvariant()
