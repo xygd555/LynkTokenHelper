@@ -1,4 +1,4 @@
-param([string]$DefaultServer = '')
+param([string]$DefaultServer = '', [switch]$SkipMiniProgramCompatibilityChecks)
 $ErrorActionPreference = 'Stop'
 $DefaultServer = $DefaultServer.Trim().TrimEnd('/')
 if ($DefaultServer) {
@@ -45,8 +45,13 @@ using System.Reflection;
 namespace LynkSignTokenHelper { internal static class BuildInfo { public const string Version = "$taskVersion"; public const string DefaultServer = @"$DefaultServer"; } }
 "@
     [IO.File]::WriteAllText((Join-Path $PSScriptRoot 'wpf/obj/BuildInfo.cs'),$taskBuildInfo,[Text.UTF8Encoding]::new($false))
-    & $taskMSBuild wpf/LynkSignTokenHelper.csproj /nologo /t:Build /p:Configuration=Release /p:Platform=x64 /v:minimal /m:1 /nr:false
+    $taskSkipCompatibility = $SkipMiniProgramCompatibilityChecks.IsPresent.ToString().ToLowerInvariant()
+    & $taskMSBuild wpf/LynkSignTokenHelper.csproj /nologo /t:Build /p:Configuration=Release /p:Platform=x64 /p:SkipMiniProgramCompatibilityChecks=$taskSkipCompatibility /v:minimal /m:1 /nr:false
     if($LASTEXITCODE -ne 0){throw 'WPF 桌面程序构建失败。'}
+    if ($SkipMiniProgramCompatibilityChecks) {
+        Write-Host '已生成跳过小程序兼容性检查的测试版：dist/unchecked/LynkSignTokenHelper-windows-x64-unchecked.exe'
+        return
+    }
     Copy-Item -LiteralPath README.md -Destination dist/README.md -Force
     $taskLicenseDir=Join-Path $PSScriptRoot 'dist/licenses'
     if(Test-Path -LiteralPath $taskLicenseDir){

@@ -93,6 +93,16 @@ LYNK_HELPER_REPOSITORY=https://github.com/xygd555/LynkTokenHelper
 
 `test.ps1` 执行 Go 测试、静态检查和 WPF 交互测试。测试使用虚构凭据、模拟面板及隔离状态目录，不安装证书或启用系统代理。WPF 测试以独立桌面进程启动，会短暂显示模拟界面，需在可交互的 Windows 桌面执行。测试截图输出到 `test-results/wpf-native/`；不同渲染比例截图不等同于多机 DPI 实机验收。
 
+### 跳过小程序兼容性检查的手动测试版
+
+按需执行以下命令生成单独的测试文件：
+
+```powershell
+./build.ps1 -SkipMiniProgramCompatibilityChecks
+```
+
+输出为 `dist/unchecked/LynkSignTokenHelper-windows-x64-unchecked.exe`。该文件跳过函数特征、模块范围、管理器布局和主线程兼容性拦截，直接沿用现有内部地址尝试调用；不会自动适配新版本地址，可能导致微信或小程序退出，仅供手动测试。实际进程与任务队列可用性、本地服务归属、连接校验和资源清理仍保留。普通构建与 GitHub Actions 默认不启用此模式，正常 EXE 和 ZIP 不会被测试版覆盖。
+
 ## 发布新版
 
 工具使用根目录 `VERSION` 中的独立版本号，格式为 `v1.3.6`，修改工具后先更新该文件。

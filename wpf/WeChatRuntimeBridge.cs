@@ -28,6 +28,11 @@ namespace LynkSignTokenHelper
         const long QueryRva = 0x3c7d810;
         const long GuardRva = 0xda2e608;
         const uint WaitObject = 0;
+#if WECHAT_LAUNCH_UNCHECKED
+        internal static readonly bool CompatibilityChecksEnabled = false;
+#else
+        internal static readonly bool CompatibilityChecksEnabled = true;
+#endif
 
         [DllImport("kernel32.dll", SetLastError=true)] static extern IntPtr OpenProcess(uint access, bool inherit, int pid);
         [DllImport("kernel32.dll", SetLastError=true)] static extern bool CloseHandle(IntPtr handle);
@@ -84,19 +89,21 @@ namespace LynkSignTokenHelper
                 try {
                     ProcessModule module = process.Modules.Cast<ProcessModule>().FirstOrDefault(m => string.Equals(m.ModuleName, "flue.dll", StringComparison.OrdinalIgnoreCase));
                     if (module == null) continue;
-                    if (module.ModuleMemorySize < ExecutorRva + 8) throw new InvalidOperationException("当前微信运行环境不匹配，已停止打开小程序。");
+                    if (CompatibilityChecksEnabled && module.ModuleMemorySize < ExecutorRva + 8) throw new InvalidOperationException("当前微信运行环境不匹配，已停止打开小程序。");
                     handle = OpenProcess(0x410, false, process.Id);
                     Check(handle != IntPtr.Zero, "读取候选小程序进程失败");
                     long moduleBase = module.BaseAddress.ToInt64();
-                    // Verify the known layout before reading globals; version numbers are not a gate.
-                    VerifyCode(handle, moduleBase, SetterRva, "41 57 41 56 41 55 41 54 56 57 55 53 48 81 ec 98 01 00 00");
-                    VerifyCode(handle, moduleBase, UiRunnerRva, "56 57 53 48 83 ec 20 48 89 d7 48 89 ce");
-                    VerifyCode(handle, moduleBase, QueryRva, "89 d0 c3");
+                    // The opt-in test build skips layout checks and retains the existing offsets.
+                    if (CompatibilityChecksEnabled) {
+                        VerifyCode(handle, moduleBase, SetterRva, "41 57 41 56 41 55 41 54 56 57 55 53 48 81 ec 98 01 00 00");
+                        VerifyCode(handle, moduleBase, UiRunnerRva, "56 57 53 48 83 ec 20 48 89 d7 48 89 ce");
+                        VerifyCode(handle, moduleBase, QueryRva, "89 d0 c3");
+                    }
                     long executor = Pointer(handle, moduleBase + ExecutorRva);
                     long manager = moduleBase + ManagerRva;
-                    if (executor == 0 || Pointer(handle, manager) != moduleBase + 0xbe09c38) continue;
+                    if (executor == 0 || (CompatibilityChecksEnabled && Pointer(handle, manager) != moduleBase + 0xbe09c38)) continue;
                     bool initialized = Read(handle, manager + 0x18, 1)[0] == 1;
-                    if (!initialized) continue;
+                    if (CompatibilityChecksEnabled && !initialized) continue;
                     long queues = Pointer(handle, executor + 8);
                     long runner = queues == 0 ? 0 : Pointer(handle, queues + 0x28);
                     int state = BitConverter.ToInt32(Read(handle, manager + 0xe4, 4), 0);
@@ -133,9 +140,11 @@ namespace LynkSignTokenHelper
         }
 
         public static void SetServer(WeChatRuntimeTarget target, bool enabled, Action onPosted = null) {
-            if (CallTarget(target, enabled ? 1 : 0, onPosted) != "CrBrowserMain") throw new InvalidOperationException("微信启动任务的线程校验失败，请重新打开微信后重试。");
+            string threadName = CallTarget(target, enabled ? 1 : 0, onPosted);
+            if (CompatibilityChecksEnabled && threadName != "CrBrowserMain") throw new InvalidOperationException("微信启动任务的线程校验失败，请重新打开微信后重试。");
         }
         public static void CheckQueue(WeChatRuntimeTarget target) {
+            if (!CompatibilityChecksEnabled) return;
             if (CallTarget(target, -1) != "CrBrowserMain") throw new InvalidOperationException("当前微信运行环境不匹配，已停止打开小程序。");
         }
         static string CallTarget(WeChatRuntimeTarget target, int desired, Action onPosted = null) {

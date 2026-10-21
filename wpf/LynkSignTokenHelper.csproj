@@ -18,6 +18,12 @@
     <AutoGenerateBindingRedirects>false</AutoGenerateBindingRedirects>
     <Deterministic>true</Deterministic>
   </PropertyGroup>
+  <PropertyGroup Condition="'$(SkipMiniProgramCompatibilityChecks)' == 'true'">
+    <DefineConstants>$(DefineConstants);WECHAT_LAUNCH_UNCHECKED</DefineConstants>
+    <AssemblyName>LynkSignTokenHelper-windows-x64-unchecked</AssemblyName>
+    <OutputPath>..\dist\unchecked\</OutputPath>
+    <IntermediateOutputPath>obj\unchecked\$(Configuration)\</IntermediateOutputPath>
+  </PropertyGroup>
   <ItemGroup>
     <Reference Include="System" />
     <Reference Include="System.Core" />
