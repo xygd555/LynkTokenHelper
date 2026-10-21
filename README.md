@@ -101,7 +101,7 @@ LYNK_HELPER_REPOSITORY=https://github.com/xygd555/LynkTokenHelper
 ./build.ps1 -SkipMiniProgramCompatibilityChecks
 ```
 
-输出为 `dist/unchecked/LynkSignTokenHelper-windows-x64-unchecked.exe`。该文件跳过函数特征、模块范围、管理器布局和主线程兼容性拦截，直接沿用现有内部地址尝试调用；不会自动适配新版本地址，可能导致微信或小程序退出，仅供手动测试。实际进程与任务队列可用性、本地服务归属、连接校验和资源清理仍保留。普通构建与 GitHub Actions 默认不启用此模式，正常 EXE 和 ZIP 不会被测试版覆盖。
+输出为 `dist/unchecked/LynkSignTokenHelper-windows-x64-unchecked.exe`。该文件跳过函数特征、模块范围、管理器布局和主线程兼容性拦截，直接沿用现有内部地址尝试调用；不会自动适配新版本地址，可能导致微信或小程序退出，仅供手动测试。实际进程与任务队列可用性、本地服务归属、连接校验和资源清理仍保留。普通构建与 GitHub Actions 默认不启用此模式，正常 EXE 和 ZIP 不会被测试版覆盖。运行 `./test.ps1 -SkipMiniProgramCompatibilityChecks` 可直接验证测试版的窗口、资源加载和内核交互；微信启动流程使用模拟对象，不会调用真实微信。
 
 ## 发布新版
 

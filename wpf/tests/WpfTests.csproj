@@ -12,6 +12,10 @@
     <DebugType>none</DebugType>
     <ApplicationManifest>..\app.manifest</ApplicationManifest>
   </PropertyGroup>
+  <PropertyGroup Condition="'$(SkipMiniProgramCompatibilityChecks)' == 'true'">
+    <OutputPath>..\..\test-results\wpf-unchecked\</OutputPath>
+    <IntermediateOutputPath>..\obj\tests-unchecked\</IntermediateOutputPath>
+  </PropertyGroup>
   <ItemGroup>
     <Reference Include="System" />
     <Reference Include="System.Core" />
@@ -21,8 +25,11 @@
     <Reference Include="WindowsBase" />
     <Reference Include="PresentationCore" />
     <Reference Include="PresentationFramework" />
-    <Reference Include="LynkSignTokenHelper-windows-x64">
+    <Reference Include="LynkSignTokenHelper-windows-x64" Condition="'$(SkipMiniProgramCompatibilityChecks)' != 'true'">
       <HintPath>..\..\dist\LynkSignTokenHelper-windows-x64.exe</HintPath>
+    </Reference>
+    <Reference Include="LynkSignTokenHelper-windows-x64-unchecked" Condition="'$(SkipMiniProgramCompatibilityChecks)' == 'true'">
+      <HintPath>..\..\dist\unchecked\LynkSignTokenHelper-windows-x64-unchecked.exe</HintPath>
     </Reference>
   </ItemGroup>
   <ItemGroup>

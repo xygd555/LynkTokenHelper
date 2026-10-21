@@ -56,7 +56,8 @@ namespace LynkSignTokenHelper
             InitializeComponent();
             Title = "领克凭据助手 " + BuildInfo.Version;
             AppVersion.Text = "  " + BuildInfo.Version;
-            Icon = BitmapFrame.Create(new Uri("pack://application:,,,/LynkSignTokenHelper-windows-x64;component/Branding/lynk-icon.ico"));
+            string assemblyName = typeof(MainWindow).Assembly.GetName().Name;
+            Icon = BitmapFrame.Create(new Uri("pack://application:,,,/" + assemblyName + ";component/Branding/lynk-icon.ico"));
             Address.Text = BuildInfo.DefaultServer;
             toastTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2.1) };
             toastTimer.Tick += (sender, args) => { toastTimer.Stop(); Toast.Visibility = Visibility.Collapsed; };
