@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
-using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -18,7 +17,6 @@ namespace LynkSignTokenHelper
         public long UiTaskRunner;
         public int ServerState;
         public bool Initialized;
-        public string RuntimeVersion;
     }
 
     internal static class WeChatRuntimeBridge {
@@ -30,9 +28,6 @@ namespace LynkSignTokenHelper
         const long QueryRva = 0x3c7d810;
         const long GuardRva = 0xda2e608;
         const uint WaitObject = 0;
-        static readonly string ExpectedRuntime = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), @"Tencent\xwechat\XPlugin\Plugins\RadiumWMPF\25510\extracted\runtime\flue.dll");
-        internal const string SupportedWeChatVersion = "4.1.13.12";
-        internal const string SupportedRuntimeVersion = "2.5.6.25510";
 
         [DllImport("kernel32.dll", SetLastError=true)] static extern IntPtr OpenProcess(uint access, bool inherit, int pid);
         [DllImport("kernel32.dll", SetLastError=true)] static extern bool CloseHandle(IntPtr handle);
@@ -82,31 +77,21 @@ namespace LynkSignTokenHelper
             return Enumerable.Range(0, text.Length / 2).Select(i => Convert.ToByte(text.Substring(i * 2, 2), 16)).ToArray();
         }
 
-        static bool IsSupportedWeChat() {
-            var versions = new List<string>();
-            foreach (Process process in Process.GetProcessesByName("Weixin")) {
-                using (process) {
-                    try {
-                        ProcessModule module = process.Modules.Cast<ProcessModule>().FirstOrDefault(m => string.Equals(m.ModuleName, "Weixin.dll", StringComparison.OrdinalIgnoreCase));
-                        if (module != null) versions.Add(FileVersionInfo.GetVersionInfo(module.FileName).FileVersion);
-                    } catch (Win32Exception) { return false; }
-                    catch (InvalidOperationException) { return false; }
-                }
-            }
-            return versions.Count == 1 && versions[0] == SupportedWeChatVersion;
-        }
-
         public static WeChatRuntimeTarget[] FindTargets() {
             var found = new List<WeChatRuntimeTarget>();
-            if (!IsSupportedWeChat()) return found.ToArray();
             foreach (Process process in Process.GetProcessesByName("WeChatAppEx")) {
                 IntPtr handle = IntPtr.Zero;
                 try {
-                    ProcessModule module = process.Modules.Cast<ProcessModule>().FirstOrDefault(m => string.Equals(m.FileName, ExpectedRuntime, StringComparison.OrdinalIgnoreCase));
-                    if (module == null || FileVersionInfo.GetVersionInfo(module.FileName).FileVersion != SupportedRuntimeVersion) continue;
+                    ProcessModule module = process.Modules.Cast<ProcessModule>().FirstOrDefault(m => string.Equals(m.ModuleName, "flue.dll", StringComparison.OrdinalIgnoreCase));
+                    if (module == null) continue;
+                    if (module.ModuleMemorySize < ExecutorRva + 8) throw new InvalidOperationException("当前微信运行环境不匹配，已停止打开小程序。");
                     handle = OpenProcess(0x410, false, process.Id);
                     Check(handle != IntPtr.Zero, "读取候选小程序进程失败");
                     long moduleBase = module.BaseAddress.ToInt64();
+                    // Verify the known layout before reading globals; version numbers are not a gate.
+                    VerifyCode(handle, moduleBase, SetterRva, "41 57 41 56 41 55 41 54 56 57 55 53 48 81 ec 98 01 00 00");
+                    VerifyCode(handle, moduleBase, UiRunnerRva, "56 57 53 48 83 ec 20 48 89 d7 48 89 ce");
+                    VerifyCode(handle, moduleBase, QueryRva, "89 d0 c3");
                     long executor = Pointer(handle, moduleBase + ExecutorRva);
                     long manager = moduleBase + ManagerRva;
                     if (executor == 0 || Pointer(handle, manager) != moduleBase + 0xbe09c38) continue;
@@ -115,11 +100,8 @@ namespace LynkSignTokenHelper
                     long queues = Pointer(handle, executor + 8);
                     long runner = queues == 0 ? 0 : Pointer(handle, queues + 0x28);
                     int state = BitConverter.ToInt32(Read(handle, manager + 0xe4, 4), 0);
-                    VerifyCode(handle, moduleBase, SetterRva, "41 57 41 56 41 55 41 54 56 57 55 53 48 81 ec 98 01 00 00");
-                    VerifyCode(handle, moduleBase, UiRunnerRva, "56 57 53 48 83 ec 20 48 89 d7 48 89 ce");
-                    VerifyCode(handle, moduleBase, QueryRva, "89 d0 c3");
                     if (runner == 0) throw new InvalidOperationException("UI 任务队列尚未准备好");
-                    found.Add(new WeChatRuntimeTarget { ProcessId=process.Id, ModuleBase=moduleBase, ModulePath=module.FileName, Manager=manager, UiTaskRunner=runner, ServerState=state, Initialized=initialized, RuntimeVersion=FileVersionInfo.GetVersionInfo(module.FileName).FileVersion });
+                    found.Add(new WeChatRuntimeTarget { ProcessId=process.Id, ModuleBase=moduleBase, ModulePath=module.FileName, Manager=manager, UiTaskRunner=runner, ServerState=state, Initialized=initialized });
                 } catch (InvalidOperationException) { throw; }
                 catch (Win32Exception) { throw; }
                 finally { if (handle != IntPtr.Zero) CloseHandle(handle); process.Dispose(); }

@@ -41,7 +41,7 @@ namespace LynkSignTokenHelper
         private static async Task<bool> LaunchAsync(CancellationToken cancellationToken)
         {
             WeChatRuntimeTarget[] targets = WeChatRuntimeBridge.FindTargets();
-            // Unknown versions keep the protocol path; never call internal offsets on them.
+            // Only unavailable or occupied runtimes use the protocol path; version numbers are not checked.
             if (targets.Length != 1 || targets[0].ServerState != 0 || File.Exists(EndpointPath)) return false;
             WeChatRuntimeTarget target = targets[0];
             WeChatRuntimeBridge.CheckQueue(target);
