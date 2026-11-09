@@ -11,6 +11,7 @@
   </Window.Resources>
   <Grid x:Name="Root" Background="#202329">
     <Grid x:Name="LoginView">
+      <ScrollViewer x:Name="LoginScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
       <Border x:Name="LoginCardHost" Width="388" Margin="20,16" Padding="24,22" HorizontalAlignment="Center" VerticalAlignment="Center" Background="#2B3038" BorderBrush="#1AFFFFFF" BorderThickness="1" CornerRadius="15">
         <StackPanel>
           <Grid x:Name="LoginHeader" Margin="0,0,0,18">
@@ -42,8 +43,23 @@
                 <Path x:Name="PasswordIcon" Data="{StaticResource Icon_eye}" Style="{StaticResource Icon}" />
               </Button>
             </Grid>
+            <TextBlock x:Name="CaptchaLabel" Text="图片验证码" Margin="0,12,0,6" />
+            <Grid x:Name="CaptchaRow" Height="42">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition />
+                <ColumnDefinition Width="10" />
+                <ColumnDefinition Width="130" />
+              </Grid.ColumnDefinitions>
+              <TextBox x:Name="CaptchaCode" AutomationProperties.Name="图片验证码" MaxLength="4" TextChanged="CaptchaInputChanged" />
+              <Button x:Name="CaptchaButton" Grid.Column="2" Style="{StaticResource Subtle}" MinHeight="0" Padding="0" IsEnabled="False" Click="CaptchaClicked">
+                <Grid>
+                  <Image x:Name="CaptchaImage" Width="126" Stretch="Uniform" Visibility="Collapsed" />
+                  <TextBlock x:Name="CaptchaAction" Text="获取验证码" FontSize="13" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                </Grid>
+              </Button>
+            </Grid>
           </StackPanel>
-          <CheckBox x:Name="AllowHttp" Content="允许内网 HTTP 明文连接" Margin="0,14,0,14" />
+          <CheckBox x:Name="AllowHttp" Content="允许内网 HTTP 明文连接" Margin="0,14,0,14" Checked="LoginConnectionChanged" Unchecked="LoginConnectionChanged" />
           <Grid x:Name="LoginActions" Height="44">
             <Grid.ColumnDefinitions>
               <ColumnDefinition />
@@ -60,7 +76,6 @@
               <TextBlock x:Name="LoginButtonText" Text="账号密码登录" FontSize="13" Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
             </Button>
           </Grid>
-          <TextBlock x:Name="BrowserLoginHint" Height="36" Text="网页授权只需服务器地址；也可填写面板账号密码直接登录。" Foreground="{StaticResource MutedBrush}" FontSize="12" LineHeight="18" Margin="0,10,0,0" />
           <Grid x:Name="LoginNoticeHost" Height="36" Margin="0,4,0,0">
             <Grid x:Name="BrowserLoginActions" Height="32" Visibility="Hidden">
               <Button x:Name="ReopenAuthorizationButton" Content="重新打开授权页" Style="{StaticResource Subtle}" MinHeight="28" Height="32" Padding="0" FontSize="12" HorizontalAlignment="Left" Click="ReopenAuthorizationClicked" />
@@ -72,6 +87,7 @@
           <TextBlock x:Name="LocalCaptureHint" Text="只获取并复制 Token，不上传到服务器" Foreground="{StaticResource MutedBrush}" FontSize="12" LineHeight="18" Margin="0,6,0,0" HorizontalAlignment="Center" />
         </StackPanel>
       </Border>
+      </ScrollViewer>
     </Grid>
     <ScrollViewer x:Name="MainView" Visibility="Collapsed" Padding="26,14,26,0" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
       <Grid MinHeight="{Binding ViewportHeight, ElementName=MainView}">

@@ -21,6 +21,7 @@ namespace LynkSignTokenHelper
         public bool local_only { get; set; }
         public bool authorizing { get; set; }
         public string authorization_url { get; set; }
+        public LoginCaptcha login_captcha { get; set; }
         public string username { get; set; }
         public string server_address { get; set; }
         public bool trusted { get; set; }
@@ -36,6 +37,14 @@ namespace LynkSignTokenHelper
         public int selected_candidate { get; set; }
         public string captured_at { get; set; }
     }
+    public sealed class LoginCaptcha
+    {
+        public string id { get; set; }
+        public string image { get; set; }
+        public string address { get; set; }
+        public bool allow_http { get; set; }
+        public string expires_at { get; set; }
+    }
     public sealed class CoreSnapshot
     {
         public string type { get; set; }
@@ -49,6 +58,8 @@ namespace LynkSignTokenHelper
         public bool pending { get; set; }
         public bool closing { get; set; }
         public string error { get; set; }
+        public string error_code { get; set; }
+        public int retry_after { get; set; }
     }
     public interface ICoreClient : IDisposable
     {

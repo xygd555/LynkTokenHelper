@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -16,25 +17,26 @@ type candidateView struct {
 	Source   string `json:"source"`
 }
 type appStatus struct {
-	Message              string          `json:"message"`
-	Authorizing          bool            `json:"authorizing"`
-	AuthorizationURL     string          `json:"authorization_url"`
-	LoggedIn             bool            `json:"logged_in"`
-	LocalOnly            bool            `json:"local_only"`
-	Username             string          `json:"username"`
-	ServerAddress        string          `json:"server_address"`
-	Trusted              bool            `json:"trusted"`
-	Capturing            bool            `json:"capturing"`
-	Connections          int             `json:"connections"`
-	LynkRequests         int             `json:"lynk_requests"`
-	Candidates           []candidateView `json:"candidates"`
-	ConfirmationRequired bool            `json:"confirmation_required"`
-	Account              accountInfo     `json:"account"`
-	PreviousAccountID    string          `json:"previous_account_id"`
-	Busy                 bool            `json:"busy"`
-	Submission           string          `json:"submission"`
-	SelectedCandidate    int             `json:"selected_candidate"`
-	CapturedAt           time.Time       `json:"captured_at"`
+	Message              string             `json:"message"`
+	Authorizing          bool               `json:"authorizing"`
+	AuthorizationURL     string             `json:"authorization_url"`
+	LoginCaptcha         *passwordChallenge `json:"login_captcha,omitempty"`
+	LoggedIn             bool               `json:"logged_in"`
+	LocalOnly            bool               `json:"local_only"`
+	Username             string             `json:"username"`
+	ServerAddress        string             `json:"server_address"`
+	Trusted              bool               `json:"trusted"`
+	Capturing            bool               `json:"capturing"`
+	Connections          int                `json:"connections"`
+	LynkRequests         int                `json:"lynk_requests"`
+	Candidates           []candidateView    `json:"candidates"`
+	ConfirmationRequired bool               `json:"confirmation_required"`
+	Account              accountInfo        `json:"account"`
+	PreviousAccountID    string             `json:"previous_account_id"`
+	Busy                 bool               `json:"busy"`
+	Submission           string             `json:"submission"`
+	SelectedCandidate    int                `json:"selected_candidate"`
+	CapturedAt           time.Time          `json:"captured_at"`
 }
 
 type app struct {
@@ -62,6 +64,7 @@ func newApp(dir, certPath string, ca *tls.Certificate) *app {
 
 type actionInput struct {
 	Address, Username, Password string
+	CaptchaID, CaptchaCode      string
 	AllowHTTP                   bool
 	ID                          string
 }
@@ -98,7 +101,19 @@ func (a *app) execute(ctx context.Context, action string, input actionInput) err
 	defer func() { a.mu.Lock(); a.status.Busy = false; a.mu.Unlock() }()
 	var err error
 	switch action {
+	case "login/captcha":
+		err = a.fetchLoginCaptcha(ctx, input)
 	case "login", "login/browser", "capture/local":
+		a.mu.Lock()
+		challenge := a.status.LoginCaptcha
+		a.status.LoginCaptcha = nil
+		a.mu.Unlock()
+		if action == "login" && (challenge == nil || challenge.ID != input.CaptchaID ||
+			challenge.Address != strings.TrimSpace(input.Address) || challenge.AllowHTTP != input.AllowHTTP ||
+			!time.Now().Before(challenge.ExpiresAt) || !validCaptchaCode(input.CaptchaCode)) {
+			err = fmt.Errorf("请获取新验证码")
+			break
+		}
 		if err = a.stopCapture(false); err != nil {
 			break
 		}
@@ -120,6 +135,7 @@ func (a *app) execute(ctx context.Context, action string, input actionInput) err
 		a.status.SelectedCandidate = 0
 		a.status.Account = accountInfo{}
 		a.status.PreviousAccountID = ""
+		a.status.Message = ""
 		if a.status.LocalOnly {
 			a.status.Message = "已进入仅本地抓包模式，获取的凭据仅保留在本次工具会话中，不会上传服务器。"
 		}
@@ -128,19 +144,14 @@ func (a *app) execute(ctx context.Context, action string, input actionInput) err
 			break
 		}
 		previousPanel.revokeHelperSession()
-		settings, readErr := readProxy()
-		if readErr != nil {
-			err = readErr
-			break
-		}
-		upstream, proxyErr := settings.upstream()
-		if proxyErr != nil {
-			err = proxyErr
-			break
-		}
 		var panel *panelClient
 		var loginErr error
 		if action == "login/browser" {
+			upstream, proxyErr := panelUpstream()
+			if proxyErr != nil {
+				err = proxyErr
+				break
+			}
 			a.mu.Lock()
 			a.status.Authorizing = true
 			a.status.Message = "请在浏览器中确认授权。"
@@ -148,9 +159,10 @@ func (a *app) execute(ctx context.Context, action string, input actionInput) err
 			defer func() { a.mu.Lock(); a.status.Authorizing = false; a.status.AuthorizationURL = ""; a.mu.Unlock() }()
 			panel, loginErr = loginPanelBrowser(ctx, input.Address, input.AllowHTTP, upstream, func(address string) { a.mu.Lock(); a.status.AuthorizationURL = address; a.mu.Unlock() })
 		} else {
-			panel, loginErr = loginPanel(ctx, input.Address, input.Username, input.Password, input.AllowHTTP, upstream)
+			panel = challenge.panel
+			loginErr = panel.login(ctx, input.Username, input.Password, input.CaptchaID, input.CaptchaCode)
 		}
-		input.Password = ""
+		input.Password, input.CaptchaCode = "", ""
 		if loginErr != nil {
 			if errors.Is(loginErr, errAuthorizationDenied) || errors.Is(ctx.Err(), context.Canceled) {
 				a.mu.Lock()
@@ -237,7 +249,7 @@ func (a *app) execute(ctx context.Context, action string, input actionInput) err
 	default:
 		err = fmt.Errorf("未知操作")
 	}
-	if err != nil {
+	if err != nil && action != "login" && action != "login/captcha" {
 		a.mu.Lock()
 		a.status.Message = err.Error()
 		a.mu.Unlock()

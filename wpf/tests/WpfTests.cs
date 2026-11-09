@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net;
@@ -190,15 +191,15 @@ internal static partial class WpfTests
     private static void CheckLoginFits(MainWindow window)
     {
         var root = Control<Grid>(window, "Root");
-        foreach (string name in new[] { "LoginCardHost", "Address", "Username", "Password", "LoginButton", "LoginNotice", "BackButton", "BrowserLoginButton", "LoginActions", "LoginUpdateButton", "BrowserLoginActions", "LocalCaptureButton", "LocalCaptureHint" })
+        foreach (string name in new[] { "LoginCardHost", "Address", "Username", "Password", "CaptchaCode", "CaptchaButton", "LoginButton", "LoginNotice", "BackButton", "BrowserLoginButton", "LoginActions", "LoginUpdateButton", "BrowserLoginActions", "LocalCaptureButton", "LocalCaptureHint" })
         {
             if (!Control<FrameworkElement>(window, name).IsVisible) continue;
             Rect bounds = Bounds(window, name);
             Check(bounds.Top >= 0 && bounds.Bottom <= root.ActualHeight && bounds.Left >= 0 && bounds.Right <= root.ActualWidth,
                 name + " exceeds login client area: " + bounds + " / " + root.RenderSize);
         }
-        var scroll = window.FindName("LoginView") as ScrollViewer;
-        Check(scroll == null || scroll.ExtentHeight <= scroll.ViewportHeight + 1, "login form requires vertical scrolling");
+        var scroll = Control<ScrollViewer>(window, "LoginScroll");
+        Check(scroll.ExtentHeight <= scroll.ViewportHeight + 1, "login form requires vertical scrolling");
     }
     private static void ActualBrowserAuthorization(string address)
     {
@@ -286,6 +287,7 @@ internal static partial class WpfTests
                     Check(Control<FrameworkElement>(window, "PasswordLoginPanel").IsVisible && Control<TextBox>(window, "Username").IsEnabled, "cancelled authorization did not restore password login");
                     Control<TextBox>(window, "Username").Text = "测试用户";
                     Control<PasswordBox>(window, "Password").Password = "synthetic-password";
+                    FillCaptcha(window);
                     Control<PasswordBox>(window, "Password").Focus();
                     PressKey(window, Key.Enter);
                     Until(() => Control<FrameworkElement>(window, "MainView").IsVisible);
@@ -399,6 +401,26 @@ internal static partial class WpfTests
             Check(Math.Abs(browser.Top - password.Top) < 1 && Math.Abs(browser.Height - password.Height) < 1 && browser.Right + 10 <= password.Left, "login actions are not aligned side by side");
             Rect field = Bounds(window, "Password"), eye = Bounds(window, "TogglePassword");
             Check(field.Contains(eye), "password visibility button is outside password field");
+            Control<TextBox>(window, "Username").Text = "测试用户";
+            Control<PasswordBox>(window, "Password").Password = "synthetic-password";
+            Check(!Control<Button>(window, "LoginButton").IsEnabled, "password login enabled without a captcha");
+            Rect captchaButton = Bounds(window, "CaptchaButton"), captchaField = Bounds(window, "CaptchaCode");
+            FillCaptcha(window);
+            Check(Bounds(window, "CaptchaButton") == captchaButton && Bounds(window, "CaptchaCode") == captchaField, "captcha changed form geometry");
+            Check(Control<TextBlock>(window, "CaptchaAction").Visibility == Visibility.Collapsed && (string)Control<Button>(window, "CaptchaButton").ToolTip == "换一张", "refresh label must be a tooltip");
+            Capture(window, area.Height == 600 ? "wpf-captcha-small-100" : "wpf-captcha-100");
+            core.LockNextPassword = true;
+            Click(window, "LoginButton");
+            Until(() => Text(window, "LoginNotice").Contains("5:00"));
+            Check(!Control<Button>(window, "LoginButton").IsEnabled && Control<Button>(window, "BrowserLoginButton").IsEnabled,
+                "account lock disabled browser authorization or allowed password login");
+            Check(Control<FrameworkElement>(window, "ImportantOverlay").Visibility != Visibility.Visible, "account lock interrupted with a modal");
+            CheckLoginFits(window);
+            Capture(window, area.Height == 600 ? "wpf-captcha-locked-small-100" : "wpf-captcha-locked-100");
+            FillCaptcha(window);
+            Check(!Text(window, "LoginNotice").Contains("后重试"), "manual refresh did not allow an early retry after admin unlock");
+            Control<TextBox>(window, "Address").Text = "https://other.example.com";
+            Check(Control<Image>(window, "CaptchaImage").Source == null && Control<TextBox>(window, "CaptchaCode").Text == "", "new server inherited the previous captcha");
             double buttonTop = Bounds(window, "LoginButton").Top;
             core.Snapshot.state.message = "请先在面板修改初始密码，再登录工具";
             core.Emit();
@@ -409,6 +431,34 @@ internal static partial class WpfTests
             if (area.Height == 1000) Capture(window, "wpf-login-error-150", 1.5);
             window.Close();
             Until(() => !window.IsVisible);
+        }
+    }
+    private static void FillCaptcha(MainWindow window)
+    {
+        Click(window, "CaptchaButton");
+        Until(() => Control<Image>(window, "CaptchaImage").Source != null && Control<TextBox>(window, "CaptchaCode").IsEnabled);
+        Control<TextBox>(window, "CaptchaCode").Text = "A2B3";
+        Pump();
+    }
+
+    private static string TestCaptchaImage()
+    {
+        var visual = new DrawingVisual();
+        using (DrawingContext drawing = visual.RenderOpen())
+        {
+            drawing.DrawRectangle(Brushes.WhiteSmoke, null, new Rect(0, 0, 168, 56));
+            drawing.DrawText(new FormattedText("A2B3", CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
+                new Typeface("Consolas"), 31, Brushes.DarkSlateBlue, 1.0), new Point(48, 9));
+            drawing.DrawLine(new Pen(Brushes.SlateGray, 1), new Point(9, 38), new Point(157, 18));
+        }
+        var bitmap = new RenderTargetBitmap(168, 56, 96, 96, PixelFormats.Pbgra32);
+        bitmap.Render(visual);
+        var encoder = new PngBitmapEncoder();
+        encoder.Frames.Add(BitmapFrame.Create(bitmap));
+        using (var stream = new MemoryStream())
+        {
+            encoder.Save(stream);
+            return Convert.ToBase64String(stream.ToArray());
         }
     }
     private static void CheckCaptureLayout(MainWindow window, Rect[] before, string action)
@@ -494,6 +544,7 @@ internal static partial class WpfTests
         Click(window, "TogglePassword");
         Check(Control<TextBox>(window, "VisiblePassword").Text == "synthetic-password", "password reveal lost value");
         Click(window, "TogglePassword");
+        FillCaptcha(window);
         Click(window, "LoginButton");
         Until(() => Control<ScrollViewer>(window, "MainView").Visibility == Visibility.Visible);
         Check(Control<PasswordBox>(window, "Password").Password == "" && Control<TextBox>(window, "VisiblePassword").Text == "", "submitted password retained in UI");
@@ -576,6 +627,7 @@ internal static partial class WpfTests
         Capture(window, "wpf-switch-server-100");
         Check(Control<TextBox>(window, "VisiblePassword").Visibility == Visibility.Collapsed && Control<PasswordBox>(window, "Password").Password == "", "switch did not reset password");
         Control<PasswordBox>(window, "Password").Password = "synthetic-password";
+        FillCaptcha(window);
         Click(window, "LoginButton");
         Until(() => Control<ScrollViewer>(window, "MainView").Visibility == Visibility.Visible);
         core.FailFirstClose = true;
@@ -618,6 +670,7 @@ internal static partial class WpfTests
     }
     private static void ActualCorePipe()
     {
+        string captchaImage = TestCaptchaImage();
         var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
         int port = ((IPEndPoint)listener.LocalEndpoint).Port;
@@ -648,7 +701,9 @@ internal static partial class WpfTests
                     for (int read = 0; read < length;) { int count = stream.Read(body, read, length-read); if (count == 0) break; read += count; }
                     string payload = Encoding.UTF8.GetString(body);
                     lock (served) served.Add(header + payload);
-                    string response = header.StartsWith("POST /api/auth/login ") ? "{\"csrf_token\":\"synthetic-csrf\"}" : "{\"username\":\"测试用户\",\"entitlement\":{\"active\":true}}";
+                    string response = header.StartsWith("GET /api/auth/captcha ")
+                        ? "{\"captcha_id\":\"pipe-challenge\",\"expires_in\":180,\"image\":\"data:image/png;base64," + captchaImage + "\"}"
+                        : header.StartsWith("POST /api/auth/login ") ? "{\"csrf_token\":\"synthetic-csrf\"}" : "{\"username\":\"测试用户\",\"entitlement\":{\"active\":true}}";
                     byte[] content = Encoding.UTF8.GetBytes(response);
                     byte[] responseHead = Encoding.ASCII.GetBytes("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nSet-Cookie: lynk_session=synthetic; Path=/; HttpOnly\r\nConnection: close\r\nContent-Length: " + content.Length + "\r\n\r\n");
                     stream.Write(responseHead,0,responseHead.Length); stream.Write(content,0,content.Length);
@@ -669,10 +724,15 @@ internal static partial class WpfTests
             Until(() => Volatile.Read(ref snapshot) != null || Volatile.Read(ref failure) != null);
             Check(failure == null, "actual core startup failed: " + failure);
             Check(snapshot.default_server == expectedDefaultServer, "UI and core default servers differ");
-            client.Command("login", new { Address = "http://127.0.0.1:" + port, Username = "测试用户", Password = "synthetic-password", AllowHTTP = true });
+            string address = "http://127.0.0.1:" + port;
+            client.Command("login/captcha", new { Address = address, AllowHTTP = true });
+            Until(() => Volatile.Read(ref snapshot).state.login_captcha != null && !snapshot.pending);
+            client.Command("login", new { Address = address, Username = "测试用户", Password = "synthetic-password", AllowHTTP = true, CaptchaID = snapshot.state.login_captcha.id, CaptchaCode = "A2B3" });
             Until(() => Volatile.Read(ref snapshot).state.logged_in || Volatile.Read(ref failure) != null);
             Check(failure == null && snapshot.state.username == "测试用户", "UTF-8 core login failed");
-            lock (served) Check(served.Count == 2 && served[0].Contains("测试用户") && served[1].Contains("lynk_session=synthetic"), "real pipe changed login data or cookies");
+            lock (served) Check(served.Count == 3 && served[0].StartsWith("GET /api/auth/captcha ") &&
+                served[1].Contains("测试用户") && served[1].Contains("pipe-challenge") && served[1].Contains("A2B3") &&
+                served[2].Contains("lynk_session=synthetic"), "real pipe changed captcha, login data or cookies");
             client.Close();
             Until(() => Volatile.Read(ref closed));
         }
@@ -987,7 +1047,7 @@ internal static partial class WpfTests
         public event Action<CoreSnapshot> Updated;
         public event Action<string> Faulted;
         public event Action Closed;
-        public bool Started, Disposed, FailFirstClose;
+        public bool Started, Disposed, FailFirstClose, LockNextPassword;
         public readonly List<string> Commands = new List<string>();
         public string LongToken = "rt_synthetic_" + string.Concat(Enumerable.Repeat("a1b2c3d4",32));
         public CoreSnapshot Snapshot = new CoreSnapshot { type = "snapshot", protocol = 1, state = new AppState { message = "请先登录服务器" } };
@@ -1001,16 +1061,36 @@ internal static partial class WpfTests
             Commands.Add(action);
             Snapshot.request_id = ++sequence;
             Snapshot.error = null;
+            Snapshot.error_code = null;
+            Snapshot.retry_after = 0;
             switch (action)
             {
                 case "capture/local":
                     Snapshot.state = new AppState { local_only = true, message = "仅本地抓包，凭据不会上传。" };
                     Snapshot.token = Snapshot.device_id = null;
                     break;
+                case "login/captcha":
+                    var captchaInput = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(new JavaScriptSerializer().Serialize(input));
+                    Check(!captchaInput.ContainsKey("Password") && !captchaInput.ContainsKey("Username"), "captcha request included credentials");
+                    Snapshot.state.login_captcha = new LoginCaptcha {
+                        id = "captcha-" + sequence, image = TestCaptchaImage(), address = (string)captchaInput["Address"],
+                        allow_http = (bool)captchaInput["AllowHTTP"], expires_at = DateTimeOffset.UtcNow.AddMinutes(3).ToString("O")
+                    };
+                    break;
                 case "login":
                     Snapshot.state.local_only = false;
                     var values = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(new JavaScriptSerializer().Serialize(input));
                     Check((string)values["Username"] == "测试用户" && (string)values["Password"] == "synthetic-password", "native login input changed");
+                    Check((string)values["CaptchaID"] == Snapshot.state.login_captcha?.id && (string)values["CaptchaCode"] == "A2B3", "native login lost the captcha");
+                    Snapshot.state.login_captcha = null;
+                    if (LockNextPassword)
+                    {
+                        LockNextPassword = false;
+                        Snapshot.error = "账号登录已锁定";
+                        Snapshot.error_code = "login_locked";
+                        Snapshot.retry_after = 300;
+                        break;
+                    }
                     Snapshot.state.logged_in = true; Snapshot.state.username = "周末去看海"; Snapshot.state.server_address = "https://sign.example.com"; Snapshot.state.message = "服务器登录成功"; Snapshot.token = null; Snapshot.state.candidates = null; Snapshot.state.submission = null; Snapshot.state.confirmation_required = false;
                     break;
                 case "login/browser":

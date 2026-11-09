@@ -112,8 +112,11 @@ func TestCaptureLocalClearsServerStateWithoutContactingPanel(t *testing.T) {
 	app.candidates = []credential{{"rt_local_synthetic", "local-device", "响应正文"}}
 	app.status.Candidates = []candidateView{{"0", "local-device", "响应正文"}}
 	app.status.CapturedAt = time.Now()
+	if err := app.execute(context.Background(), "login", actionInput{Address: server.URL, Username: "synthetic", Password: "synthetic", AllowHTTP: true}); err == nil || !app.currentStatus().LocalOnly {
+		t.Fatal("missing captcha permitted password login or discarded local state")
+	}
 	// A failed login must still leave local mode and discard its retained capture.
-	_ = app.execute(context.Background(), "login", actionInput{Address: "invalid", Username: "synthetic", Password: "synthetic"})
+	_ = app.execute(context.Background(), "login/browser", actionInput{Address: "invalid"})
 	state = app.currentStatus()
 	if state.LocalOnly || state.LoggedIn || app.panel != nil || len(app.candidates) != 0 || len(state.Candidates) != 0 || !state.CapturedAt.IsZero() {
 		t.Fatal("server login retained local-mode credentials")

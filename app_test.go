@@ -75,7 +75,7 @@ func TestCapturedCredentialSurvivesSubmitFailureConfirmationAndCancel(t *testing
 	if strings.Contains(string(data), value.Token) {
 		t.Fatal("raw credential leaked into serialized status")
 	}
-	_ = app.execute(context.Background(), "login", actionInput{Address: "invalid", Username: "synthetic", Password: "synthetic"})
+	_ = app.execute(context.Background(), "login/browser", actionInput{Address: "invalid"})
 	if retained().Token != "" || len(app.currentStatus().Candidates) != 0 {
 		t.Fatal("server switch retained previous server credential")
 	}

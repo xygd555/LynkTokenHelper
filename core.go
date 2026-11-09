@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strconv"
@@ -30,6 +31,8 @@ type coreSnapshot struct {
 	Pending       bool      `json:"pending"`
 	Closing       bool      `json:"closing"`
 	Error         string    `json:"error"`
+	ErrorCode     string    `json:"error_code,omitempty"`
+	RetryAfter    int       `json:"retry_after,omitempty"`
 }
 
 type coreResult struct {
@@ -45,6 +48,7 @@ type coreSession struct {
 	pending    bool
 	closing    bool
 	lastError  string
+	retry      *panelRetryError
 }
 
 func (s *coreSession) snapshot() coreSnapshot {
@@ -66,7 +70,11 @@ func (s *coreSession) snapshot() coreSnapshot {
 	if s.selected < len(s.app.candidates) {
 		value = s.app.candidates[s.selected]
 	}
-	return coreSnapshot{Type: "snapshot", Protocol: 1, State: state, Token: value.Token, DeviceID: value.DeviceID, DefaultServer: defaultServer, Selected: s.selected, RequestID: s.requestID, Pending: s.pending, Closing: s.closing, Error: s.lastError}
+	result := coreSnapshot{Type: "snapshot", Protocol: 1, State: state, Token: value.Token, DeviceID: value.DeviceID, DefaultServer: defaultServer, Selected: s.selected, RequestID: s.requestID, Pending: s.pending, Closing: s.closing, Error: s.lastError}
+	if s.retry != nil {
+		result.ErrorCode, result.RetryAfter = s.retry.code, s.retry.seconds
+	}
+	return result
 }
 
 // runCore only communicates through the anonymous pipes owned by the WPF host.
@@ -141,7 +149,7 @@ func runCore(app *app, input io.Reader, output io.Writer) error {
 					}
 				case "command":
 					switch request.Action {
-					case "login", "login/browser", "capture/local", "certificate/install", "certificate/remove", "start", "stop", "restore", "submit", "confirm", "cancel":
+					case "login", "login/captcha", "login/browser", "capture/local", "certificate/install", "certificate/remove", "start", "stop", "restore", "submit", "confirm", "cancel":
 						state := app.currentStatus()
 						if (request.Action == "submit" && (state.Capturing || state.ConfirmationRequired)) || (request.Action == "start" && state.ConfirmationRequired) {
 							break
@@ -152,11 +160,12 @@ func runCore(app *app, input io.Reader, output io.Writer) error {
 						session.requestID = request.ID
 						session.pending = true
 						session.lastError = ""
+						session.retry = nil
 						operationContext, cancelOperation := context.WithCancel(app.context())
 						operationCancel, pendingAction = cancelOperation, request.Action
 						go func() {
 							err := app.execute(operationContext, request.Action, request.Input)
-							request.Input.Password = ""
+							request.Input.Password, request.Input.CaptchaCode = "", ""
 							results <- coreResult{request.Action, err}
 						}()
 					}
@@ -165,6 +174,8 @@ func runCore(app *app, input io.Reader, output io.Writer) error {
 		case result := <-results:
 			if result.err != nil {
 				session.lastError = result.err.Error()
+				session.retry = nil
+				errors.As(result.err, &session.retry)
 			}
 			if result.action == "close" {
 				if result.err == nil {

@@ -14,10 +14,13 @@ func TestCorePipeLoginSelectSubmitAndClose(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
+		case "/api/auth/captcha":
+			_, _ = w.Write([]byte(testCaptchaJSON))
 		case "/api/auth/login":
 			var input map[string]string
 			_ = json.NewDecoder(r.Body).Decode(&input)
-			if input["username"] != "测试用户" || input["password"] != "synthetic-password" {
+			if input["username"] != "测试用户" || input["password"] != "synthetic-password" ||
+				input["captcha_id"] != "test-challenge" || input["captcha_code"] != "A2B3" {
 				t.Error("pipe login payload changed")
 			}
 			http.SetCookie(w, &http.Cookie{Name: "session", Value: "synthetic", Path: "/"})
@@ -60,8 +63,17 @@ func TestCorePipeLoginSelectSubmitAndClose(t *testing.T) {
 		}
 	}
 	read(func(s coreSnapshot) bool { return s.Type == "snapshot" && s.Protocol == 1 })
-	_ = encoder.Encode(coreRequest{Type: "command", ID: 1, Action: "login", Input: actionInput{Address: server.URL, Username: "测试用户", Password: "synthetic-password", AllowHTTP: true}})
-	read(func(s coreSnapshot) bool { return s.RequestID == 1 && !s.Pending && s.State.LoggedIn })
+	_ = encoder.Encode(coreRequest{Type: "command", ID: 1, Action: "login/captcha", Input: actionInput{Address: server.URL, AllowHTTP: true}})
+	captcha := read(func(s coreSnapshot) bool { return s.RequestID == 1 && !s.Pending })
+	if captcha.State.LoginCaptcha == nil || captcha.State.LoginCaptcha.ID != "test-challenge" {
+		t.Fatalf("missing captcha snapshot: %s", captcha.Error)
+	}
+	_ = encoder.Encode(coreRequest{Type: "command", ID: 2, Action: "login", Input: actionInput{Address: server.URL,
+		Username: "测试用户", Password: "synthetic-password", CaptchaID: captcha.State.LoginCaptcha.ID, CaptchaCode: "A2B3", AllowHTTP: true}})
+	loggedIn := read(func(s coreSnapshot) bool { return s.RequestID == 2 && !s.Pending })
+	if !loggedIn.State.LoggedIn || loggedIn.State.LoginCaptcha != nil {
+		t.Fatalf("password login did not consume the challenge: %s", loggedIn.Error)
+	}
 	app.mu.Lock()
 	app.candidates = []credential{{"rt_first_synthetic", "one", "响应正文"}, {"rt_second_synthetic", "two", "响应正文"}}
 	app.status.Candidates = []candidateView{{"0", "one", "响应正文"}, {"1", "two", "响应正文"}}
@@ -73,7 +85,7 @@ func TestCorePipeLoginSelectSubmitAndClose(t *testing.T) {
 	if selected.Token != "rt_second_synthetic" || selected.DeviceID != "two" {
 		t.Fatal("pipe snapshot lost full credential")
 	}
-	_ = encoder.Encode(coreRequest{Type: "command", ID: 2, Action: "submit"})
+	_ = encoder.Encode(coreRequest{Type: "command", ID: 3, Action: "submit"})
 	saved := read(func(s coreSnapshot) bool { return !s.Pending && s.State.Submission == "saved" })
 	if saved.Token != selected.Token {
 		t.Fatal("pipe save lost backup credential")
@@ -100,7 +112,7 @@ func TestCorePipeCloseCancelsOperation(t *testing.T) {
 			defer reader.Close()
 			done := make(chan error, 1)
 			go func() { done <- runCore(app, reader, io.Discard) }()
-			_ = json.NewEncoder(writer).Encode(coreRequest{Type: "command", ID: 1, Action: "login", Input: actionInput{Address: server.URL, Username: "synthetic", Password: "synthetic", AllowHTTP: true}})
+			_ = json.NewEncoder(writer).Encode(coreRequest{Type: "command", ID: 1, Action: "login/captcha", Input: actionInput{Address: server.URL, AllowHTTP: true}})
 			select {
 			case <-started:
 			case <-time.After(5 * time.Second):

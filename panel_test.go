@@ -3,21 +3,27 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 )
 
+const testCaptchaJSON = `{"captcha_id":"test-challenge","image":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j4uoAAAAASUVORK5CYII=","expires_in":180}`
+
 func TestPanelLoginAndImportUseSessionAndCSRF(t *testing.T) {
 	imports := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
+		case "/api/auth/captcha":
+			_, _ = w.Write([]byte(testCaptchaJSON))
 		case "/api/auth/login":
 			var input map[string]string
 			_ = json.NewDecoder(r.Body).Decode(&input)
-			if input["username"] != "tester" || input["password"] != "test-password" {
+			if input["username"] != "tester" || input["password"] != "test-password" ||
+				input["captcha_id"] != "test-challenge" || input["captcha_code"] != "a2b3" {
 				t.Error("login payload lost")
 			}
 			http.SetCookie(w, &http.Cookie{Name: "lynk_session", Value: "session-test", Path: "/", HttpOnly: true})
@@ -49,11 +55,19 @@ func TestPanelLoginAndImportUseSessionAndCSRF(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	if _, err := loginPanel(context.Background(), server.URL, "tester", "test-password", false, nil); err == nil {
+	if _, err := newPanelClient(server.URL, false, nil); err == nil {
 		t.Fatal("HTTP silently accepted")
 	}
-	panel, err := loginPanel(context.Background(), server.URL, "tester", "test-password", true, nil)
+	panel, err := newPanelClient(server.URL, true, nil)
 	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	challenge, err := panel.captcha(ctx, server.URL, true)
+	if err != nil || challenge.ID != "test-challenge" || challenge.Image == "" || challenge.panel != panel {
+		t.Fatalf("captcha was not obtained on the login connection: %v", err)
+	}
+	if err := panel.login(ctx, "tester", "test-password", challenge.ID, "a2b3"); err != nil {
 		t.Fatal(err)
 	}
 	app := &app{panel: panel}
@@ -75,7 +89,8 @@ func TestPanelRedirectAndRemoteErrorCannotLeakCredentials(t *testing.T) {
 	defer target.Close()
 	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, target.URL, 307) }))
 	defer source.Close()
-	if _, err := loginPanel(context.Background(), source.URL, "tester", "private-password", true, nil); err == nil || strings.Contains(err.Error(), "private-password") {
+	panel, _ := newPanelClient(source.URL, true, nil)
+	if err := panel.login(context.Background(), "tester", "private-password", "challenge", "A2B3"); err == nil || strings.Contains(err.Error(), "private-password") {
 		t.Fatal("redirect accepted or error leaked")
 	}
 	if received {
@@ -86,7 +101,35 @@ func TestPanelRedirectAndRemoteErrorCannotLeakCredentials(t *testing.T) {
 		_, _ = w.Write([]byte(`{"error":"private-refresh private-password"}`))
 	}))
 	defer failure.Close()
-	if _, err := loginPanel(context.Background(), failure.URL, "tester", "private-password", true, nil); err == nil || strings.Contains(err.Error(), "private-") {
+	panel, _ = newPanelClient(failure.URL, true, nil)
+	if err := panel.login(context.Background(), "tester", "private-password", "challenge", "A2B3"); err == nil || strings.Contains(err.Error(), "private-") {
 		t.Fatal("remote message leaked")
+	}
+}
+
+func TestPanelLoginRetryAndOldPanel(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/auth/captcha":
+			http.NotFound(w, r)
+		case "/api/auth/login":
+			w.Header().Set("Retry-After", "298")
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = w.Write([]byte(`{"code":"login_locked","retry_after":300,"error":"secret message"}`))
+		}
+	}))
+	defer server.Close()
+	panel, err := newPanelClient(server.URL, true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if _, err := panel.captcha(ctx, server.URL, true); err == nil || !strings.Contains(err.Error(), "v1.5.13") {
+		t.Fatalf("old panel did not report the minimum version: %v", err)
+	}
+	err = panel.login(ctx, "tester", "test-password", "challenge", "A2B3")
+	var retry *panelRetryError
+	if !errors.As(err, &retry) || retry.code != "login_locked" || retry.seconds != 298 || strings.Contains(err.Error(), "secret") {
+		t.Fatalf("login lost safe retry metadata: %v", err)
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -49,29 +50,24 @@ func newPanelClient(address string, allowHTTP bool, upstream *url.URL) (*panelCl
 	return &panelClient{base: strings.TrimRight(u.String(), "/"), client: client}, nil
 }
 
-func loginPanel(ctx context.Context, address, username, password string, allowHTTP bool, upstream *url.URL) (*panelClient, error) {
-	panel, err := newPanelClient(address, allowHTTP, upstream)
-	if err != nil {
-		return nil, err
-	}
+func (panel *panelClient) login(ctx context.Context, username, password, captchaID, captchaCode string) error {
 	var login struct {
 		CSRF       string `json:"csrf_token"`
 		MustChange bool   `json:"must_change_password"`
 	}
-	if err := panel.call(ctx, "/api/auth/login", map[string]string{"username": username, "password": password}, &login); err != nil {
-		return nil, err
+	if err := panel.call(ctx, "/api/auth/login", map[string]string{
+		"username": username, "password": password, "captcha_id": captchaID, "captcha_code": captchaCode,
+	}, &login); err != nil {
+		return err
 	}
 	panel.csrf = login.CSRF
 	if panel.csrf == "" {
-		return nil, fmt.Errorf("服务器未返回登录会话，请检查地址是否指向 Lynk Sign")
+		return fmt.Errorf("服务器未返回登录会话")
 	}
 	if login.MustChange {
-		return nil, fmt.Errorf("请先在面板修改初始密码，再登录工具")
+		return fmt.Errorf("请先在面板修改初始密码")
 	}
-	if err := panel.checkIdentity(ctx); err != nil {
-		return nil, err
-	}
-	return panel, nil
+	return panel.checkIdentity(ctx)
 }
 
 func (panel *panelClient) checkIdentity(ctx context.Context) error {
@@ -125,15 +121,35 @@ func (p *panelClient) call(ctx context.Context, path string, input, output any) 
 	if response.StatusCode != 200 {
 		// Only expose known error codes; remote messages may contain credentials.
 		var failure struct {
-			Code string `json:"code"`
+			Code       string `json:"code"`
+			RetryAfter int    `json:"retry_after"`
 		}
 		_ = json.Unmarshal(raw, &failure)
+		if response.StatusCode == http.StatusTooManyRequests && (path == "/api/auth/login" || path == "/api/auth/captcha") {
+			if failure.Code == "login_locked" || failure.Code == "rate_limited" {
+				seconds, _ := strconv.Atoi(response.Header.Get("Retry-After"))
+				if seconds <= 0 {
+					seconds = failure.RetryAfter
+				}
+				message := "请求过于频繁，请稍后重试"
+				if failure.Code == "login_locked" {
+					message = "账号登录已锁定"
+				}
+				return &panelRetryError{code: failure.Code, message: message, seconds: min(max(seconds, 0), 1800)}
+			}
+		}
+		if path == "/api/auth/captcha" && (response.StatusCode == 404 || response.StatusCode == 405) {
+			return fmt.Errorf("密码登录需要面板 v1.5.13 或更高版本")
+		}
+		if path == "/api/auth/login" && (failure.Code == "captcha_required" || failure.Code == "captcha_invalid") {
+			return fmt.Errorf("验证码无效，请换一张")
+		}
 		messages := map[string]string{"auth_required": "面板登录已过期，请重新登录", "membership_expired": "账号权益已到期", "account_verify_failed": "领克凭据验证失败，请重新登录小程序后再试", "account_changed": "服务器账号配置已变更，请重新抓取", "confirmation_expired": "换绑确认已过期，请重新抓取", "csrf_failed": "登录校验已过期，请重新登录", "invalid_grant": "网页授权已过期或校验失败，请重新授权", "authorization_expired": "网页授权已过期，请重新授权", "authorization_rate_limited": "网页授权请求过于频繁，请稍后重试", "helper_scope_denied": "工具授权权限不足，请重新授权"}
 		if message := messages[failure.Code]; message != "" {
 			return fmt.Errorf("%s", message)
 		}
 		if response.StatusCode == 404 && strings.HasPrefix(path, "/api/helper/") {
-			return fmt.Errorf("网页授权需要面板 v1.4.0 或更高版本，请更新面板或使用账号密码登录")
+			return fmt.Errorf("网页授权需要面板 v1.4.0 或更高版本")
 		}
 		if response.StatusCode == 404 {
 			return fmt.Errorf("服务器接口不存在，请先更新服务端至 v1.1.0 或更高版本")

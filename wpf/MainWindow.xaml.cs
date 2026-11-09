@@ -3,10 +3,12 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.Globalization;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
@@ -32,6 +34,9 @@ namespace LynkSignTokenHelper
         private string candidateSignature = "";
         private readonly DispatcherTimer toastTimer;
         private readonly DispatcherTimer miniProgramCaptureTimer;
+        private readonly DispatcherTimer captchaTimer;
+        private string renderedCaptchaID, discardedCaptchaID, nativeLoginMessage, retryAccount;
+        private DateTimeOffset retryUntil;
         private string miniProgramCaptureAt, miniProgramCaptureServer;
         private int miniProgramCaptureGeneration;
         private readonly Queue<ImportantNotice> importantNotices = new Queue<ImportantNotice>();
@@ -61,6 +66,8 @@ namespace LynkSignTokenHelper
             Address.Text = BuildInfo.DefaultServer;
             toastTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2.1) };
             toastTimer.Tick += (sender, args) => { toastTimer.Stop(); Toast.Visibility = Visibility.Collapsed; };
+            captchaTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+            captchaTimer.Tick += (sender, args) => { UpdateLoginButton(); UpdateLoginNotice(); };
             miniProgramCaptureTimer = new DispatcherTimer { Interval = miniProgramCaptureDelay ?? TimeSpan.FromSeconds(10) };
             miniProgramCaptureTimer.Tick += (sender, args) =>
             {
@@ -71,7 +78,22 @@ namespace LynkSignTokenHelper
             {
                 ready = alive = true;
                 bool browserAuthorized = lastAction == "login/browser" && pendingId != 0 && pendingId <= value.request_id && !value.pending && value.state.logged_in && string.IsNullOrEmpty(value.error);
-                if (pendingId != 0 && pendingId <= value.request_id && !value.pending)
+                bool commandCompleted = pendingId != 0 && pendingId <= value.request_id && !value.pending;
+                bool nativeLoginResult = commandCompleted && (lastAction == "login" || lastAction == "login/captcha");
+                if (nativeLoginResult)
+                {
+                    nativeLoginMessage = value.retry_after > 0 ? null : value.error;
+                    if (value.retry_after > 0)
+                    {
+                        retryUntil = DateTimeOffset.UtcNow.AddSeconds(value.retry_after);
+                        retryAccount = value.error_code == "login_locked" ? LoginAccountKey(Username.Text) : null;
+                    }
+                    else if (lastAction == "login/captcha" && value.state.login_captcha != null && retryAccount != null)
+                    {
+                        retryUntil = default(DateTimeOffset);
+                    }
+                }
+                if (commandCompleted)
                 {
                     if (((lastAction == "login" || lastAction == "login/browser") && value.state.logged_in || lastAction == "capture/local" && value.state.local_only) && string.IsNullOrEmpty(value.error)) editLogin = false;
                     pendingId = 0;
@@ -87,7 +109,7 @@ namespace LynkSignTokenHelper
                 Render();
                 if (browserAuthorized) BringToFront();
                 if (openAuthorization) TryOpenAuthorization();
-                if (newError) ShowImportantNotice("操作未完成", value.error);
+                if (newError && !nativeLoginResult) ShowImportantNotice("操作未完成", value.error);
                 else if (submissionFailed) ShowImportantNotice("提交失败，Token 已保留", "本次获取的 Token 已保留，可以在主界面复制备用，也可以检查服务器状态后重试提交。\n\n详细原因见主界面的状态提示。");
                 else if (captureWarning) ShowImportantNotice("抓取需要处理", value.state.message);
             }));
@@ -121,7 +143,7 @@ namespace LynkSignTokenHelper
                 if (restoreOnly) ShowImportantNotice("代理已恢复", "原代理配置已恢复，可以关闭工具。", false, Close);
                 else Close();
             }));
-            Closed += (sender, args) => { updateLifetime.Cancel(); updateDialog?.Close(); miniProgramOperation?.Cancel(); CancelMiniProgramReminder(); toastTimer.Stop(); client.Dispose(); };
+            Closed += (sender, args) => { updateLifetime.Cancel(); updateDialog?.Close(); miniProgramOperation?.Cancel(); CancelMiniProgramReminder(); toastTimer.Stop(); captchaTimer.Stop(); client.Dispose(); };
             ApplyWindowSize(true);
             RenderUpdateButtons();
             Activated += (sender, args) => ScheduleUpdatePrompt();
@@ -156,18 +178,20 @@ namespace LynkSignTokenHelper
             ImportantBodyHost.MaxHeight = Math.Max(24, Math.Min(220, Height - 384));
             LoginCardHost.Width = Math.Min(388, Math.Max(280, Width - 64));
             bool compactLogin = Height < 650;
-            LoginCardHost.Padding = compactLogin ? new Thickness(18, 10, 18, 10) : new Thickness(24, 20, 24, 20);
-            LoginCardHost.Margin = new Thickness(20, compactLogin ? 10 : 16, 20, compactLogin ? 10 : 16);
-            LoginHeader.Margin = new Thickness(0, 0, 0, compactLogin ? 8 : 14);
+            LoginCardHost.Padding = compactLogin ? new Thickness(18, 8, 18, 8) : new Thickness(24, 20, 24, 20);
+            LoginCardHost.Margin = new Thickness(20, compactLogin ? 8 : 12, 20, compactLogin ? 8 : 12);
+            LoginHeader.Margin = new Thickness(0, 0, 0, compactLogin ? 6 : 14);
             LoginSubtitle.Visibility = Show(!compactLogin);
             AddressLabel.Margin = new Thickness(0, 0, 0, compactLogin ? 4 : 6);
             UsernameLabel.Margin = new Thickness(0, compactLogin ? 6 : 12, 0, compactLogin ? 4 : 6);
             PasswordLabel.Margin = new Thickness(0, compactLogin ? 6 : 12, 0, compactLogin ? 4 : 6);
+            CaptchaLabel.Margin = PasswordLabel.Margin;
+            CaptchaRow.Height = compactLogin ? 40 : 42;
             LoginActions.Height = compactLogin ? 40 : 44;
-            BrowserLoginHint.Visibility = Show(!compactLogin);
             Address.Height = Username.Height = Password.Height = VisiblePassword.Height = compactLogin ? 40 : 42;
-            AllowHttp.Margin = new Thickness(0, compactLogin ? 6 : 14, 0, compactLogin ? 8 : 14);
-            LoginNoticeHost.Height = 36;
+            AllowHttp.Margin = new Thickness(0, compactLogin ? 4 : 14, 0, compactLogin ? 6 : 14);
+            LoginNoticeHost.Height = compactLogin ? 32 : 36;
+            LocalCaptureHint.Visibility = Show(!compactLogin);
         }
         private static void Fade(UIElement element)
         {
@@ -199,15 +223,12 @@ namespace LynkSignTokenHelper
                 UpdateLoginButton();
                 bool authorizing = state.authorizing || (busy && lastAction == "login/browser");
                 BrowserLoginButtonText.Text = closeRequested ? "正在退出…" : authorizing ? "等待授权…" : !ready ? "正在准备…" : "网页授权登录";
-                BrowserLoginHint.Text = authorizing ? "请在浏览器中确认授权，授权请求有效期为 5 分钟。" : "网页授权只需服务器地址；也可填写面板账号密码直接登录。";
                 BrowserLoginActions.Visibility = authorizing ? Visibility.Visible : Visibility.Hidden;
                 CancelBrowserLoginButton.IsEnabled = authorizing && !closeRequested && alive;
                 ReopenAuthorizationButton.IsEnabled = authorizing && !string.IsNullOrEmpty(state.authorization_url) && !closeRequested;
                 BackButton.Visibility = state.logged_in || state.local_only ? Visibility.Visible : Visibility.Hidden;
                 BackButton.IsEnabled = !busy;
-                bool loginError = !loggedIn && !busy && !state.logged_in && !state.local_only && !string.IsNullOrEmpty(state.message) && !state.message.StartsWith("请先登录服务器");
-                LoginNotice.Visibility = loginError || (!alive && !string.IsNullOrEmpty(snapshot.error)) ? Visibility.Visible : Visibility.Hidden;
-                LoginNotice.Text = !alive ? snapshot.error : loginError ? state.message : "";
+                UpdateLoginNotice();
                 ServerAddress.Text = state.local_only ? "仅本地抓包 · 凭据不会上传" : state.server_address ?? "";
                 ServerAddress.ToolTip = ServerAddress.Text;
                 AccountName.Text = state.local_only ? "" : state.username ?? "";
@@ -303,10 +324,99 @@ namespace LynkSignTokenHelper
         }
         private void UpdateLoginButton()
         {
-            if (LoginButton == null || Address == null || Username == null || Password == null) return;
-            if (LocalCaptureButton != null) LocalCaptureButton.IsEnabled = ready && alive && !Busy;
-            if (BrowserLoginButton != null) BrowserLoginButton.IsEnabled = ready && alive && !Busy && !string.IsNullOrWhiteSpace(Address.Text);
-            LoginButton.IsEnabled = ready && alive && !Busy && !string.IsNullOrWhiteSpace(Address.Text) && !string.IsNullOrWhiteSpace(Username.Text) && Password.Password.Length > 0;
+            if (LoginButton == null || CaptchaButton == null || Username == null || Password == null) return;
+            bool idle = ready && alive && !Busy;
+            bool hasAddress = !string.IsNullOrWhiteSpace(Address.Text);
+            bool waiting = RetrySeconds() > 0;
+            if (LocalCaptureButton != null) LocalCaptureButton.IsEnabled = idle;
+            if (BrowserLoginButton != null) BrowserLoginButton.IsEnabled = idle && hasAddress;
+            LoginCaptcha challenge = CurrentCaptcha();
+            if (!(Busy && lastAction == "login")) RenderCaptcha(challenge);
+            CaptchaButton.IsEnabled = idle && hasAddress && (!waiting || retryAccount != null);
+            CaptchaAction.Text = Busy && lastAction == "login/captcha" ? "加载中…" : "获取验证码";
+            CaptchaCode.IsEnabled = idle && !waiting && challenge != null && CaptchaImage.Source != null;
+            LoginButton.IsEnabled = CaptchaCode.IsEnabled && !string.IsNullOrWhiteSpace(Username.Text) &&
+                Password.Password.Length > 0 && CaptchaCode.Text.Length == 4 &&
+                CaptchaCode.Text.All(c => (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z'));
+            if (captchaTimer != null)
+            {
+                if (challenge != null || retryUntil > DateTimeOffset.UtcNow) captchaTimer.Start();
+                else captchaTimer.Stop();
+            }
+        }
+
+        private static string LoginAccountKey(string value) => string.Concat(value.Trim().Select(c => c >= 'A' && c <= 'Z' ? (char)(c + ('a' - 'A')) : c));
+
+        private int RetrySeconds()
+        {
+            DateTimeOffset now = DateTimeOffset.UtcNow;
+            if (retryUntil <= now || (retryAccount != null && retryAccount != LoginAccountKey(Username.Text))) return 0;
+            return (int)Math.Ceiling((retryUntil - now).TotalSeconds);
+        }
+
+        private LoginCaptcha CurrentCaptcha()
+        {
+            LoginCaptcha captcha = snapshot?.state.login_captcha;
+            if (captcha == null || captcha.id == discardedCaptchaID || captcha.address != Address.Text.Trim() ||
+                captcha.allow_http != (AllowHttp.IsChecked == true) ||
+                !DateTimeOffset.TryParse(captcha.expires_at, CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTimeOffset expires) ||
+                expires <= DateTimeOffset.UtcNow) return null;
+            return captcha;
+        }
+
+        private void RenderCaptcha(LoginCaptcha captcha)
+        {
+            if (renderedCaptchaID == captcha?.id) return;
+            renderedCaptchaID = captcha?.id;
+            CaptchaImage.Source = null;
+            if (captcha != null)
+            {
+                try
+                {
+                    using (var image = new MemoryStream(Convert.FromBase64String(captcha.image), writable: false))
+                    {
+                        var bitmap = new BitmapImage();
+                        bitmap.BeginInit();
+                        bitmap.CacheOption = BitmapCacheOption.OnLoad;
+                        bitmap.StreamSource = image;
+                        bitmap.EndInit();
+                        bitmap.Freeze();
+                        CaptchaImage.Source = bitmap;
+                    }
+                }
+                catch (Exception error) when (error is FormatException || error is IOException || error is NotSupportedException || error is ArgumentException)
+                {
+                    discardedCaptchaID = captcha.id;
+                    nativeLoginMessage = "验证码图片无效";
+                }
+            }
+            bool hasImage = CaptchaImage.Source != null;
+            CaptchaImage.Visibility = Show(hasImage);
+            CaptchaAction.Visibility = Show(!hasImage);
+            CaptchaButton.ToolTip = hasImage ? "换一张" : null;
+            AutomationProperties.SetName(CaptchaButton, hasImage ? "换一张验证码" : "获取验证码");
+            CaptchaCode.Clear();
+        }
+
+        private void UpdateLoginNotice()
+        {
+            if (snapshot == null || LoginNotice == null) return;
+            AppState state = snapshot.state;
+            int remaining = RetrySeconds();
+            string message = null;
+            if (!alive) message = snapshot.error;
+            else if (LoginView.Visibility == Visibility.Visible && !Busy)
+            {
+                if (remaining > 0)
+                    message = (retryAccount == null ? "" : "账号已锁定，") + $"{remaining / 60}:{remaining % 60:00} 后重试";
+                else if (!string.IsNullOrEmpty(nativeLoginMessage))
+                    message = nativeLoginMessage;
+                else if (!state.logged_in && !state.local_only && state.message != snapshot.error &&
+                    !string.IsNullOrEmpty(state.message) && !state.message.StartsWith("请先登录服务器"))
+                    message = state.message;
+            }
+            LoginNotice.Text = message ?? "";
+            LoginNotice.Visibility = string.IsNullOrEmpty(message) ? Visibility.Hidden : Visibility.Visible;
         }
         private void Send(string action, object input = null)
         {
@@ -391,7 +501,26 @@ namespace LynkSignTokenHelper
             try { CopyText(value); ShowToast(label + "已复制"); }
             catch (Exception) { ShowToast("剪贴板正在被其他程序使用，请稍后重试。", false); }
         }
-        private void LoginInputChanged(object sender, TextChangedEventArgs args) => UpdateLoginButton();
+        private void LoginInputChanged(object sender, TextChangedEventArgs args)
+        {
+            if (sender == Address) LoginConnectionChanged(sender, args);
+            else { nativeLoginMessage = null; UpdateLoginButton(); UpdateLoginNotice(); }
+        }
+        private void LoginConnectionChanged(object sender, RoutedEventArgs args)
+        {
+            discardedCaptchaID = snapshot?.state.login_captcha?.id;
+            nativeLoginMessage = retryAccount = null;
+            retryUntil = default(DateTimeOffset);
+            UpdateLoginButton();
+            UpdateLoginNotice();
+        }
+        private void CaptchaInputChanged(object sender, TextChangedEventArgs args) => UpdateLoginButton();
+        private void CaptchaClicked(object sender, RoutedEventArgs args)
+        {
+            if (!CaptchaButton.IsEnabled) return;
+            nativeLoginMessage = null;
+            Send("login/captcha", new { Address = Address.Text.Trim(), AllowHTTP = AllowHttp.IsChecked == true });
+        }
         private void PasswordChanged(object sender, RoutedEventArgs args) => UpdateLoginButton();
         private void VisiblePasswordChanged(object sender, TextChangedEventArgs args)
         {
@@ -410,6 +539,7 @@ namespace LynkSignTokenHelper
         private void BrowserLoginClicked(object sender, RoutedEventArgs args)
         {
             if (!BrowserLoginButton.IsEnabled) return;
+            nativeLoginMessage = null;
             Password.Clear(); VisiblePassword.Clear();
             Send("login/browser", new { Address = Address.Text.Trim(), AllowHTTP = AllowHttp.IsChecked == true });
         }
@@ -433,8 +563,14 @@ namespace LynkSignTokenHelper
         }
         private void LoginClicked(object sender, RoutedEventArgs args)
         {
-            if (!LoginButton.IsEnabled) return;
-            var input = new { Address = Address.Text.Trim(), Username = Username.Text.Trim(), Password = Password.Password, AllowHTTP = AllowHttp.IsChecked == true };
+            LoginCaptcha captcha = CurrentCaptcha();
+            if (!LoginButton.IsEnabled || captcha == null) return;
+            var input = new
+            {
+                Address = Address.Text.Trim(), Username = Username.Text.Trim(), Password = Password.Password,
+                AllowHTTP = AllowHttp.IsChecked == true, CaptchaID = captcha.id, CaptchaCode = CaptchaCode.Text
+            };
+            nativeLoginMessage = null;
             Send("login", input);
             Password.Clear();
             VisiblePassword.Clear();
@@ -565,7 +701,7 @@ namespace LynkSignTokenHelper
             {
                 IInputElement focused = FocusManager.GetFocusedElement(this);
                 if (focused is Button) return;
-                bool credentialFocus = focused == Username || focused == Password || focused == VisiblePassword;
+                bool credentialFocus = focused == Username || focused == Password || focused == VisiblePassword || focused == CaptchaCode;
                 if (LoginButton.IsEnabled) { LoginClicked(sender, args); args.Handled = true; }
                 else if (!credentialFocus && BrowserLoginButton.IsEnabled) { BrowserLoginClicked(sender, args); args.Handled = true; }
             }
